@@ -19,125 +19,50 @@ if (isset($_GET['action']) && $_GET['action'] === 'getApprovedCoursesForPayment'
     ini_set('display_errors', 0);
 
     try {
+        // ดึงข้อมูลการลงทะเบียนที่ได้รับการอนุมัติแล้วทั้งหมดของนักเรียน 
+        // เพิ่มเงื่อนไข e.deleted_at IS NULL เพื่อไม่ดึงข้อมูลที่ถูก Soft Delete
         $sql = "SELECT e.*, c.name, c.level, c.price, c.other_expense_name, c.other_expense_price, c.course_type, c.course_month, c.duration 
                 FROM enrollments e 
                 JOIN courses c ON e.course_id = c.course_id 
-                WHERE e.user_id = ? AND e.approval_status IN ('approved', 'อนุมัติแล้ว')";
+                WHERE e.user_id = ? 
+                  AND e.approval_status IN ('approved', 'อนุมัติแล้ว') 
+                  AND e.deleted_at IS NULL";
         $stmt = $conn->prepare($sql);
         $stmt->execute([$userId]);
         $result = $stmt->get_result();
         
-        $coursesMap = [];
-        while ($row = $result->fetch_assoc()) {
-            $cId = $row['course_id'];
-            if (!isset($coursesMap[$cId])) {
-                $coursesMap[$cId] = [];
-            }
-            $coursesMap[$cId][] = $row;
-        }
-
         $pendingPayments = [];
-        $thMonths = ['มค', 'กพ', 'มีค', 'เมย', 'พค', 'มิย', 'กค', 'สค', 'กย', 'ตค', 'พย', 'ธค'];
 
-        foreach ($coursesMap as $cId => $enrolls) {
-            $cInfo = $enrolls[0]; 
+        // วนลูปเช็คทุกรายการลงทะเบียน
+        while ($row = $result->fetch_assoc()) {
+            $pStatus = $row['payment_status'];
+            
+            // กรองเฉพาะรายการที่ยังไม่ได้ชำระ หรือ รอตรวจสอบสลิป
+            // (เอา approval_payment ออกแล้ว เพื่อให้ card หายไปเมื่อแอดมินอนุมัติสลิป)
+            if (empty($pStatus) || $pStatus === 'pending_payment' || $pStatus === 'รอชำระเงิน' || $pStatus === 'รอตรวจสอบ') {
+                
+                // เช็คว่ามีการแนบสลิปหรือระบุว่าจ่ายเงินสดมาแล้วหรือยัง
+                $hasPayment = (!empty($row['slip_url']) || $row['payment_method'] === 'เงินสด') ? true : false;
+                
+                // จัดการข้อความแสดงเดือน (อิงจากรอบเดือนที่จ่าย หรือ เดือนของคอร์ส หรือเป็นแบบรายครั้ง)
+                $monthYearText = !empty($row['paid_month']) ? $row['paid_month'] : (!empty($row['course_month']) ? $row['course_month'] : 'รายครั้ง');
 
-            if ($cInfo['course_type'] !== 'คอร์สกลุ่ม') {
-                $latest = end($enrolls); 
-                $pStatus = $latest['payment_status'];
-                if (empty($pStatus) || $pStatus === 'pending_payment' || $pStatus === 'รอตรวจสอบ' || $pStatus === 'รอชำระเงิน') {
-                    $hasPayment = (!empty($latest['slip_url']) || $latest['payment_method'] === 'เงินสด') ? true : false;
-                    $pendingPayments[] = [
-                        'enrollId' => $latest['enroll_id'],
-                        'courseId' => $cId,
-                        'courseName' => $cInfo['name'],
-                        'level' => $cInfo['level'],
-                        'price' => $cInfo['price'],
-                        'otherExpenseName' => $cInfo['other_expense_name'] ?? '',
-                        'otherExpensePrice' => (float)($cInfo['other_expense_price'] ?? 0),
-                        'paymentStatus' => 'pending_payment', 
-                        'hasPayment' => $hasPayment,          
-                        'monthYearText' => 'รายครั้ง',
-                        'isNewRow' => false
-                    ];
-                }
-            } else {
-                $dueMonths = [];
-                $duration = $cInfo['duration'];
-                if (!empty($duration) && strpos($duration, '-') !== false) {
-                    $dates = explode('-', $duration);
-                    $startStr = trim($dates[0]); $endStr = trim($dates[1]);
-                    $startP = explode('/', $startStr); $endP = explode('/', $endStr);
-                    
-                    if (count($startP) === 3 && count($endP) === 3) {
-                        $startD = new DateTime(sprintf('%04d-%02d-%02d', $startP[2]-543, $startP[1], $startP[0]));
-                        $endD = new DateTime(sprintf('%04d-%02d-%02d', $endP[2]-543, $endP[1], $endP[0]));
-                        $today = new DateTime();
-                        $iterD = clone $startD;
-                        $first = true; $loopGuard = 0;
-                        
-                        while (($iterD <= $today || $first) && $iterD <= $endD && $loopGuard < 36) {
-                            $mIndex = (int)$iterD->format('n') - 1;
-                            $mStr = $thMonths[$mIndex];
-                            if (!in_array($mStr, $dueMonths)) { $dueMonths[] = $mStr; }
-                            $iterD->modify('+1 month');
-                            $first = false; $loopGuard++;
-                        }
-                    }
-                }
-
-                if (empty($dueMonths)) {
-                    $mMap = ["มกราคม"=>"มค","กุมภาพันธ์"=>"กพ","มีนาคม"=>"มีค","เมษายน"=>"เมย","พฤษภาคม"=>"พค","มิถุนายน"=>"มิย","กรกฎาคม"=>"กค","สิงหาคม"=>"สค","กันยายน"=>"กย","ตุลาคม"=>"ตค","พฤศจิกายน"=>"พย","ธันวาคม"=>"ธค"];
-                    $dueMonths[] = $mMap[$cInfo['course_month']] ?? "มค";
-                }
-
-                $coveredMap = [];
-                foreach ($enrolls as $e) {
-                    if (!empty($e['paid_month']) && $e['paid_month'] !== 'รายครั้ง') {
-                        $coveredMap[$e['paid_month']] = $e;
-                    }
-                }
-
-                if (empty($coveredMap[$dueMonths[0]]) && (!empty($cInfo['payment_status']) && empty($cInfo['paid_month']))) {
-                    $coveredMap[$dueMonths[0]] = $cInfo;
-                }
-
-                $targetMonth = null; $targetEnrollRow = null; $needsNewRow = false;
-
-                foreach ($dueMonths as $dm) {
-                    if (isset($coveredMap[$dm])) {
-                        $row = $coveredMap[$dm];
-                        $pStat = $row['payment_status'];
-                        if (empty($pStat) || $pStat === 'pending_payment' || $pStat === 'รอตรวจสอบ' || $pStat === 'รอชำระเงิน') {
-                            $targetMonth = $dm; $targetEnrollRow = $row; $needsNewRow = false; break;
-                        }
-                    } else {
-                        $targetMonth = $dm; $targetEnrollRow = $cInfo; $needsNewRow = true; break;
-                    }
-                }
-
-                if ($targetMonth) {
-                    $hasPayment = false;
-                    if (!$needsNewRow) {
-                        $hasPayment = (!empty($targetEnrollRow['slip_url']) || $targetEnrollRow['payment_method'] === 'เงินสด') ? true : false;
-                    }
-
-                    $pendingPayments[] = [
-                        'enrollId' => $targetEnrollRow['enroll_id'],
-                        'courseId' => $cId,
-                        'courseName' => $cInfo['name'],
-                        'level' => $cInfo['level'],
-                        'price' => $cInfo['price'],
-                        'otherExpenseName' => $cInfo['other_expense_name'] ?? '',
-                        'otherExpensePrice' => (float)($cInfo['other_expense_price'] ?? 0),
-                        'paymentStatus' => 'pending_payment', 
-                        'hasPayment' => $hasPayment,
-                        'monthYearText' => $targetMonth,
-                        'isNewRow' => $needsNewRow
-                    ];
-                }
+                $pendingPayments[] = [
+                    'enrollId' => $row['enroll_id'],
+                    'courseId' => $row['course_id'],
+                    'courseName' => $row['name'],
+                    'level' => $row['level'],
+                    'price' => $row['price'],
+                    'otherExpenseName' => $row['other_expense_name'] ?? '',
+                    'otherExpensePrice' => (float)($row['other_expense_price'] ?? 0),
+                    'paymentStatus' => 'pending_payment', 
+                    'hasPayment' => $hasPayment,          
+                    'monthYearText' => $monthYearText,
+                    'isNewRow' => false
+                ];
             }
         }
+
         echo json_encode($pendingPayments);
     } catch (Exception $e) {
         echo json_encode([]);

@@ -21,7 +21,7 @@ if (isset($_GET['action'])) {
     try {
         switch ($action) {
             case 'getAllCourses':
-                $stmt = $conn->prepare("SELECT * FROM courses ORDER BY created_at DESC");
+                $stmt = $conn->prepare("SELECT * FROM courses WHERE deleted_at IS NULL ORDER BY created_at DESC");
                 $stmt->execute();
                 $result = $stmt->get_result();
                 
@@ -80,17 +80,18 @@ if (isset($_GET['action'])) {
 
             case 'deleteCourse':
                 $courseId = $data['courseId'];
-                $stmt = $conn->prepare("DELETE FROM courses WHERE course_id = ?");
+                $stmt = $conn->prepare("UPDATE courses SET deleted_at = CURRENT_TIMESTAMP WHERE course_id = ?");
                 $stmt->execute([$courseId]);
                 echo json_encode(['success' => true, 'message' => 'ลบคอร์สสำเร็จ']);
                 break;
 
             case 'getCourseStudents':
                 $courseId = $_GET['courseId'];
+                // เพิ่มเงื่อนไข AND e.deleted_at IS NULL
                 $sql = "SELECT u.user_id, u.full_name, u.nickname, u.grade, u.school, u.phone, e.approval_status 
                         FROM users u 
                         JOIN enrollments e ON u.user_id = e.user_id 
-                        WHERE e.course_id = ? AND u.role != 'admin'";
+                        WHERE e.course_id = ? AND u.role != 'admin' AND e.deleted_at IS NULL";
                 $stmt = $conn->prepare($sql);
                 $stmt->execute([$courseId]);
                 $result = $stmt->get_result();
@@ -122,10 +123,11 @@ if (isset($_GET['action'])) {
 
             case 'getAvailableStudents':
                 $courseId = $_GET['courseId'];
+                // เช็คเฉพาะคอร์สที่ยังไม่โดน Soft Delete
                 $sql = "SELECT user_id, full_name, nickname, grade, school, phone 
                         FROM users 
                         WHERE role != 'admin' 
-                        AND user_id NOT IN (SELECT user_id FROM enrollments WHERE course_id = ?)";
+                        AND user_id NOT IN (SELECT user_id FROM enrollments WHERE course_id = ? AND deleted_at IS NULL)";
                 $stmt = $conn->prepare($sql);
                 $stmt->execute([$courseId]);
                 $result = $stmt->get_result();
@@ -151,7 +153,7 @@ if (isset($_GET['action'])) {
                 $stmt = $conn->prepare("INSERT INTO enrollments (enroll_id, user_id, course_id, approval_status, payment_status) VALUES (?, ?, ?, 'approved', 'pending_payment')");
                 
                 foreach ($userIds as $userId) {
-                    $checkStmt = $conn->prepare("SELECT COUNT(*) FROM enrollments WHERE user_id = ? AND course_id = ?");
+                    $checkStmt = $conn->prepare("SELECT COUNT(*) FROM enrollments WHERE user_id = ? AND course_id = ? AND deleted_at IS NULL");
                     $checkStmt->execute([$userId, $courseId]);
                     $checkResult = $checkStmt->get_result();
                     $row = $checkResult->fetch_row();
@@ -162,6 +164,65 @@ if (isset($_GET['action'])) {
                     }
                 }
                 echo json_encode(['success' => true]);
+                break;
+
+            // ==========================================
+            // รับคำสั่ง Soft Delete นักเรียนออกจากคอร์ส
+            // ==========================================
+            case 'softDeleteStudentCourse':
+                $userId = $data['userId'] ?? null;
+                $courseId = $data['courseId'] ?? null;
+
+                if (!$userId || !$courseId) {
+                    echo json_encode(['success' => false, 'message' => 'ส่งข้อมูลไม่ครบถ้วน (ต้องการ userId และ courseId)']);
+                    break;
+                }
+
+                $thaiMonths = [
+                    'มค' => 1, 'กพ' => 2, 'มีค' => 3, 'เมย' => 4, 'พค' => 5, 'มิย' => 6,
+                    'กค' => 7, 'สค' => 8, 'กย' => 9, 'ตค' => 10, 'พย' => 11, 'ธค' => 12
+                ];
+                
+                $currentMonthNum = (int)date('n'); 
+
+                // ดึงรายการที่ยังไม่ถูกลบ
+                $stmt = $conn->prepare("SELECT enroll_id, paid_month, payment_status FROM enrollments WHERE user_id = ? AND course_id = ? AND deleted_at IS NULL");
+                $stmt->execute([$userId, $courseId]);
+                $result = $stmt->get_result();
+                $enrollments = $result->fetch_all(MYSQLI_ASSOC); 
+
+                $deletedCount = 0;
+
+                foreach ($enrollments as $enroll) {
+                    $enrollId = $enroll['enroll_id'];
+                    $paidMonthStr = trim($enroll['paid_month'] ?? '');
+                    $paymentStatus = $enroll['payment_status'];
+                    
+                    $shouldDelete = false;
+
+                    if (array_key_exists($paidMonthStr, $thaiMonths)) {
+                        $enrollMonthNum = $thaiMonths[$paidMonthStr];
+                        if ($enrollMonthNum >= $currentMonthNum) {
+                            $shouldDelete = true;
+                        } else {
+                            if ($paymentStatus !== 'approval_payment') {
+                                $shouldDelete = true;
+                            }
+                        }
+                    } else {
+                        // ไม่ระบุเดือนก็ลบเมื่อยังไม่จ่ายเงิน
+                        if ($paymentStatus !== 'approval_payment') {
+                            $shouldDelete = true;
+                        }
+                    }
+
+                    if ($shouldDelete) {
+                        $delStmt = $conn->prepare("UPDATE enrollments SET deleted_at = CURRENT_TIMESTAMP WHERE enroll_id = ?");
+                        $delStmt->execute([$enrollId]);
+                        $deletedCount++;
+                    }
+                }
+                echo json_encode(['success' => true, 'message' => "ลบข้อมูลสำเร็จ ($deletedCount รายการ)"]);
                 break;
 
             default:
@@ -407,7 +468,7 @@ if (isset($_GET['action'])) {
         <div class="modal-body text-center p-5">
           <i class="bi bi-exclamation-circle text-danger mb-4" style="font-size: 3.5rem;"></i>
           <h5 class="fw-bold mb-2">ยืนยันการลบคอร์สเรียน</h5>
-          <p class="text-muted">คุณต้องการลบคอร์ส <span id="delCourseLabelName" class="fw-bold text-dark"></span> ใช่หรือไม่?<br>การกระทำนี้จะไม่สามารถกู้คืนข้อมูลได้</p>
+          <p class="text-muted">คุณต้องการลบคอร์ส <span id="delCourseLabelName" class="fw-bold text-dark"></span> ใช่หรือไม่?</p>
           <input type="hidden" id="delCourseTargetId">
           <div class="d-flex justify-content-center gap-2 mt-4">
             <button type="button" class="btn btn-light px-4" data-bs-dismiss="modal" style="border-radius: 8px;">ยกเลิก</button>
@@ -549,7 +610,6 @@ if (isset($_GET['action'])) {
     });
   }
 
-  // เปลี่ยนเส้นทางไปยังหน้า admin_course_students.php เมื่อกดปุ่ม "นักเรียน"
   function goToStudents(id, name) {
     window.location.href = `admin_course_students.php?courseId=${id}&courseName=${encodeURIComponent(name)}`;
   }
@@ -580,7 +640,7 @@ if (isset($_GET['action'])) {
       let displayTime = course.time ? course.time : '-';
       let monthText = course.month ? course.month : '-';
       let yearText = course.yearBE ? course.yearBE : '-';
-      let typeDisplayBadge = `<span class="badge bg-primary bg-opacity-25 text-primary border px-3 py-2 rounded-pill ms-1">${course.type} (${monthText} ${yearText})</span>`;
+      let typeDisplayBadge = `<span class="badge bg-primary bg-opacity-25 text-primary border px-3 py-2 rounded-pill ms-1">${course.type}</span>`;
       let durationDisplay = course.duration ? `<div class="d-flex align-items-center mt-1"><i class="bi bi-calendar-range me-2"></i><span class="small text-muted">${course.duration}</span></div>` : '';
 
       grid.innerHTML += `

@@ -23,7 +23,8 @@ if (isset($_GET['action'])) {
             
             // 1. ดึงข้อมูลคอร์สเรียนทั้งหมด (สำหรับ Modal เลือกคอร์ส)
             case 'getAllCourses':
-                $stmt = $conn->prepare("SELECT course_id as id, name, level FROM courses ORDER BY created_at DESC");
+                // เพิ่ม WHERE deleted_at IS NULL เพื่อไม่ให้เลือกคอร์สที่โดนลบไปแล้ว
+                $stmt = $conn->prepare("SELECT course_id as id, name, level FROM courses WHERE deleted_at IS NULL ORDER BY created_at DESC");
                 $stmt->execute();
                 $result = $stmt->get_result();
                 $courses = [];
@@ -35,13 +36,15 @@ if (isset($_GET['action'])) {
 
             // 2. ดึงข้อมูลผู้ใช้งานทั้งหมด พร้อมคอร์สที่ลงทะเบียน
             case 'getAllUsers':
-                // ใช้ GROUP_CONCAT เพื่อรวบรวมคอร์สที่ลงทะเบียนไว้ในบรรทัดเดียว
+                // ใช้ DISTINCT ภายใน GROUP_CONCAT เพื่อไม่ให้คอร์สแสดงซ้ำ
+                // และตรวจสอบ e.deleted_at IS NULL และ u.deleted_at IS NULL (เพื่อไม่ดึง User ที่โดนลบ)
                 $sql = "SELECT u.*, 
-                               GROUP_CONCAT(c.course_id) as course_ids, 
-                               GROUP_CONCAT(c.name SEPARATOR ', ') as course_names 
+                               GROUP_CONCAT(DISTINCT c.course_id SEPARATOR ',') as course_ids, 
+                               GROUP_CONCAT(DISTINCT c.name SEPARATOR ', ') as course_names 
                         FROM users u 
-                        LEFT JOIN enrollments e ON u.user_id = e.user_id 
+                        LEFT JOIN enrollments e ON u.user_id = e.user_id AND e.deleted_at IS NULL
                         LEFT JOIN courses c ON e.course_id = c.course_id 
+                        WHERE u.deleted_at IS NULL 
                         GROUP BY u.user_id 
                         ORDER BY u.created_at DESC";
                 
@@ -65,8 +68,8 @@ if (isset($_GET['action'])) {
                         'parentPhone' => $row['parent_phone'],
                         'address' => $row['address'],
                         'role' => $displayRole,
-                        'courseIds' => $row['course_ids'] ?? '', // รหัสคอร์ส เช่น C123, C456
-                        'courseNames' => $row['course_names'] ?? ''
+                        'courseIds' => $row['course_ids'] ?? '', // รหัสคอร์สที่ไม่ซ้ำ
+                        'courseNames' => $row['course_names'] ?? '' // ชื่อคอร์สที่ไม่ซ้ำ
                     ];
                 }
                 echo json_encode($users);
@@ -122,8 +125,8 @@ if (isset($_GET['action'])) {
                 if ($roleDB === 'student') {
                     $newCourses = array_filter(array_map('trim', explode(',', $data['courses'])));
                     
-                    // 1. ดึงคอร์สเดิมที่มีอยู่
-                    $stmt = $conn->prepare("SELECT course_id FROM enrollments WHERE user_id = ?");
+                    // 1. ดึงคอร์สเดิมที่มีอยู่ (เช็คเฉพาะที่ยังไม่โดน Soft Delete)
+                    $stmt = $conn->prepare("SELECT course_id FROM enrollments WHERE user_id = ? AND deleted_at IS NULL");
                     $stmt->execute([$targetUserId]);
                     $res = $stmt->get_result();
                     $existingCourses = [];
@@ -131,7 +134,7 @@ if (isset($_GET['action'])) {
                         $existingCourses[] = $row['course_id'];
                     }
 
-                    // 2. ลบคอร์สที่โดนติ๊กออก
+                    // 2. ลบคอร์สที่โดนติ๊กออก 
                     $coursesToDelete = array_diff($existingCourses, $newCourses);
                     if (!empty($coursesToDelete)) {
                         $placeholders = implode(',', array_fill(0, count($coursesToDelete), '?'));
@@ -158,11 +161,11 @@ if (isset($_GET['action'])) {
                 echo json_encode(['success' => true]);
                 break;
 
-            // 4. ลบข้อมูลผู้ใช้งาน
+            // 4. ลบข้อมูลผู้ใช้งาน (เปลี่ยนเป็น Soft Delete)
             case 'deleteUser':
                 $userId = $data['userId'];
-                // การลบ Users จะลบ Enrollments อัตโนมัติ หากตั้งค่า Foreign Key เป็น ON DELETE CASCADE ในฐานข้อมูล
-                $stmt = $conn->prepare("DELETE FROM users WHERE user_id = ?");
+                // ใช้การ UPDATE แทน DELETE
+                $stmt = $conn->prepare("UPDATE users SET deleted_at = CURRENT_TIMESTAMP WHERE user_id = ?");
                 $stmt->execute([$userId]);
                 
                 echo json_encode(['success' => true]);
@@ -387,11 +390,11 @@ if (isset($_GET['action'])) {
         <div class="modal-body text-center p-5">
           <i class="bi bi-exclamation-circle text-danger mb-4" style="font-size: 3.5rem;"></i>
           <h5 class="fw-bold mb-2">ยืนยันการลบข้อมูล</h5>
-          <p class="text-muted">คุณต้องการลบข้อมูลของ <span id="deleteUserName" class="fw-bold text-dark"></span> ใช่หรือไม่?<br>การกระทำนี้ไม่สามารถกู้คืนได้</p>
+          <p class="text-muted">คุณต้องการลบผู้ใช้งาน <span id="deleteUserName" class="fw-bold text-dark"></span> ออกจากระบบใช่หรือไม่?</p>
           <input type="hidden" id="deleteUserIdTarget">
           <div class="d-flex justify-content-center gap-2 mt-4">
             <button type="button" class="btn btn-light px-4" data-bs-dismiss="modal" style="border-radius: 8px;">ยกเลิก</button>
-            <button type="button" class="btn btn-danger px-4" onclick="confirmDeleteUser()" style="border-radius: 8px;">ใช่, ลบข้อมูล</button>
+            <button type="button" class="btn btn-danger px-4" onclick="confirmDeleteUser()" style="border-radius: 8px;">ใช่, ยืนยันการลบ</button>
           </div>
         </div>
       </div>

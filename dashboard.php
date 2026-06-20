@@ -49,8 +49,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
     ];
 
     try {
-        // 1. ดึงข้อมูลนักเรียนทั้งหมด
-        $sqlUsers = "SELECT user_id, full_name, nickname, grade, phone FROM users WHERE role = 'student'";
+        // 1. ดึงข้อมูลนักเรียนทั้งหมด (เช็ค soft delete ของ table users)
+        $sqlUsers = "SELECT user_id, full_name, nickname, grade, phone FROM users WHERE role = 'student' AND deleted_at IS NULL";
         $resUsers = $conn->query($sqlUsers);
         if ($resUsers) {
             $response['totalStudents'] = $resUsers->num_rows;
@@ -65,13 +65,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
             }
         }
 
-        // 2. ดึงจำนวนคอร์สเรียน
-        $resCourses = $conn->query("SELECT COUNT(*) as count FROM courses");
+        // 2. ดึงจำนวนคอร์สเรียน (เช็ค soft delete table courses)
+        $resCourses = $conn->query("SELECT COUNT(*) as count FROM courses WHERE deleted_at IS NULL");
         if ($resCourses) {
             $response['totalCourses'] = (int)$resCourses->fetch_assoc()['count'];
         }
 
         // 3. ดึงข้อมูลการลงทะเบียนและคำนวณรายได้/ค้างชำระ
+        // ดึง deleted_at ออกมาด้วยเพื่อนำมาคัดกรองฝั่ง PHP
         $sqlEnroll = "
             SELECT 
                 u.full_name, 
@@ -79,7 +80,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
                 c.price, 
                 e.approval_status, 
                 e.payment_status, 
-                COALESCE(e.approved_date, e.timestamp) as action_date 
+                COALESCE(e.approved_date, e.timestamp) as action_date,
+                u.deleted_at as user_deleted_at,
+                c.deleted_at as course_deleted_at,
+                e.deleted_at as enroll_deleted_at
             FROM enrollments e
             JOIN users u ON e.user_id = u.user_id
             JOIN courses c ON e.course_id = c.course_id
@@ -99,19 +103,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
                 $isPaid = ($status === 'paid' || $status === 'approval_payment');
                 $isUnpaid = ($status === 'pending_payment');
 
+                // เช็ค Soft Delete
+                $isUserDeleted = !empty($row['user_deleted_at']);
+                $isCourseDeleted = !empty($row['course_deleted_at']);
+                $isEnrollDeleted = !empty($row['enroll_deleted_at']);
+
                 // ข้อมูลสำหรับ Export รายคอร์ส
                 $exportStatus = $isPaid ? 'ชำระเงินแล้ว' : ($isUnpaid ? 'รอชำระเงิน' : 'อื่นๆ');
                 $exportAmount = $isPaid ? $price : ($isUnpaid ? $price : 0);
                 
-                $response['exportData'][] = [
-                    'courseName' => $row['course_name'],
-                    'studentName' => $row['full_name'],
-                    'amount' => $exportAmount,
-                    'paymentStatus' => $exportStatus,
-                    'payDate' => $isPaid ? $dateStr : '-'
-                ];
+                // กรองข้อมูล Export: รายการจ่ายแล้วเอามาทั้งหมด (ไม่สน soft delete) 
+                // แต่ถ้ารายการค้างจ่าย จะแสดงเฉพาะข้อมูลที่ยังไม่ถูก soft delete
+                if ($isPaid || (!$isPaid && !$isUserDeleted && !$isCourseDeleted && !$isEnrollDeleted)) {
+                    $response['exportData'][] = [
+                        'courseName' => $row['course_name'],
+                        'studentName' => $row['full_name'],
+                        'amount' => $exportAmount,
+                        'paymentStatus' => $exportStatus,
+                        'payDate' => $isPaid ? $dateStr : '-'
+                    ];
+                }
 
-                // ถ้ายอดชำระเงินแล้ว (คำนวณรายได้เดือนนี้ และกราฟ 6 เดือน)
+                // ถ้ายอดชำระเงินแล้ว (คำนวณรายได้เดือนนี้ และกราฟ 6 เดือน) -> ไม่เช็ค Soft Delete
                 if ($isPaid) {
                     if ($dateKey === $currentMonthKey) {
                         $response['currentMonthRevenue'] += $price;
@@ -121,14 +134,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
                     }
                 }
 
-                // ถ้ายอดค้างชำระ (เช่น อนุมัติการจองแล้ว แต่ยังไม่จ่ายเงิน)
+                // ถ้ายอดค้างชำระ -> เช็ค Soft Delete (ยอดค้างชำระ + รายชื่อค้างจ่าย)
                 if ($row['approval_status'] === 'approved' && $isUnpaid) {
-                    $response['unpaidAmount'] += $price;
-                    $response['unpaidList'][] = [
-                        'name' => $row['full_name'],
-                        'course' => $row['course_name'],
-                        'amount' => $price
-                    ];
+                    // กรองเฉพาะข้อมูลที่เกี่ยวข้องยังไม่ถูกลบ
+                    if (!$isUserDeleted && !$isCourseDeleted && !$isEnrollDeleted) {
+                        $response['unpaidAmount'] += $price;
+                        $response['unpaidList'][] = [
+                            'name' => $row['full_name'],
+                            'course' => $row['course_name'],
+                            'amount' => $price
+                        ];
+                    }
                 }
             }
         }

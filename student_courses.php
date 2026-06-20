@@ -9,7 +9,7 @@ if ($role !== 'student' && $role !== 'นักเรียน') {
     exit;
 }
 
-$userId = $_SESSION['userRowId'] ?? ''; ''; // รหัส ST-XXXX
+$userId = $_SESSION['userRowId'] ?? ''; 
 
 // ==========================================
 // API: จัดการข้อมูลคอร์สเรียนของนักเรียน (Backend)
@@ -26,17 +26,28 @@ if (isset($_GET['action'])) {
             
             // 1. ดึงข้อมูลคอร์สทั้งหมด พร้อมเช็คสถานะการลงทะเบียนของนักเรียนคนนี้
             case 'getAllCoursesForStudent':
-                // ใช้ LEFT JOIN เพื่อเอาคอร์สทั้งหมด และเช็คว่า User คนนี้ลงเรียนคอร์สไหนไปแล้วบ้าง
+                // เพิ่มเงื่อนไข WHERE c.deleted_at IS NULL และ AND e.deleted_at IS NULL
                 $sql = "SELECT c.*, e.approval_status 
                         FROM courses c 
-                        LEFT JOIN enrollments e ON c.course_id = e.course_id AND e.user_id = ?
+                        LEFT JOIN enrollments e ON c.course_id = e.course_id AND e.user_id = ? AND e.deleted_at IS NULL
+                        WHERE c.deleted_at IS NULL
                         ORDER BY c.created_at DESC";
                 $stmt = $conn->prepare($sql);
                 $stmt->execute([$userId]);
                 $result = $stmt->get_result();
                 
                 $courses = [];
+                $seenCourseIds = []; // สร้างตัวแปรเก็บ course_id ที่ถูกเพิ่มไปแล้ว
+                
                 while ($row = $result->fetch_assoc()) {
+                    $cid = $row['course_id'];
+                    
+                    // ถ้า course_id นี้ถูกนำเข้า Array ไปแล้ว ให้ข้าม (ป้องกันคอร์สแสดงซ้ำ)
+                    if (isset($seenCourseIds[$cid])) {
+                        continue;
+                    }
+                    $seenCourseIds[$cid] = true;
+
                     $status = $row['approval_status'];
                     if (empty($status)) {
                         $status = 'not_registered';
@@ -72,8 +83,8 @@ if (isset($_GET['action'])) {
             case 'registerCourse':
                 $courseId = $data['courseId'];
 
-                // ตรวจสอบก่อนว่าเคยลงทะเบียนคอร์สนี้ไปแล้วหรือยัง
-                $checkStmt = $conn->prepare("SELECT enroll_id FROM enrollments WHERE user_id = ? AND course_id = ?");
+                // ตรวจสอบก่อนว่าเคยลงทะเบียนคอร์สนี้ไปแล้วหรือยัง (เช็คเฉพาะที่ยังไม่โดน Soft Delete)
+                $checkStmt = $conn->prepare("SELECT enroll_id FROM enrollments WHERE user_id = ? AND course_id = ? AND deleted_at IS NULL");
                 $checkStmt->execute([$userId, $courseId]);
                 if ($checkStmt->get_result()->num_rows > 0) {
                     echo json_encode(['success' => false, 'message' => 'คุณได้ส่งคำขอลงทะเบียนคอร์สนี้ไปแล้ว']);
@@ -93,7 +104,7 @@ if (isset($_GET['action'])) {
             case 'cancelCourse':
                 $courseId = $data['courseId'];
 
-                $checkStmt = $conn->prepare("SELECT approval_status FROM enrollments WHERE user_id = ? AND course_id = ?");
+                $checkStmt = $conn->prepare("SELECT approval_status FROM enrollments WHERE user_id = ? AND course_id = ? AND deleted_at IS NULL");
                 $checkStmt->execute([$userId, $courseId]);
                 $res = $checkStmt->get_result();
                 
@@ -102,7 +113,8 @@ if (isset($_GET['action'])) {
                     $status = $row['approval_status'];
                     
                     if ($status === 'pending_approval' || $status === 'pending_approval') {
-                        $delStmt = $conn->prepare("DELETE FROM enrollments WHERE user_id = ? AND course_id = ?");
+                        // เปลี่ยนจาก DELETE แถวเป็น Soft Delete แทนก็ได้ หรือ DELETE ถาวร (ในที่นี้ใช้ DELETE ตามเดิม)
+                        $delStmt = $conn->prepare("DELETE FROM enrollments WHERE user_id = ? AND course_id = ? AND approval_status = 'pending_approval'");
                         $delStmt->execute([$userId, $courseId]);
                         echo json_encode(['success' => true]);
                     } else {
@@ -340,7 +352,21 @@ if (isset($_GET['action'])) {
     
     callAPI('getAllCoursesForStudent').then(courses => {
       if(courses && !courses.message) {
-        studentCoursesList = courses;
+        
+        // -------------------------------------------------------------
+        // กรองข้อมูลไม่ให้คอร์สแสดงซ้ำที่หน้าจอ (Deduplicate ฝั่ง Frontend)
+        // -------------------------------------------------------------
+        const uniqueCourses = [];
+        const seen = new Set();
+        
+        courses.forEach(course => {
+          if (!seen.has(course.id)) {
+            seen.add(course.id);
+            uniqueCourses.push(course);
+          }
+        });
+        
+        studentCoursesList = uniqueCourses;
         displayStudentCourseGrid(studentCoursesList);
       } else {
         grid.innerHTML = '<div class="col-12 text-center py-5 text-danger"><i class="bi bi-exclamation-triangle mb-2" style="font-size: 2rem;"></i><br>เกิดข้อผิดพลาดในการโหลดข้อมูล: ' + (courses.message || 'Unknown Error') + '</div>';
@@ -365,7 +391,7 @@ if (isset($_GET['action'])) {
       
       let monthText = course.month ? course.month : '-';
       let yearText = course.yearBE ? course.yearBE : '-';
-      let typeDisplayBadge = `<span class="badge bg-primary bg-opacity-25 text-primary border px-3 py-2 rounded-pill ms-1">${course.type || 'ไม่ระบุ'} (${monthText} ${yearText})</span>`;
+      let typeDisplayBadge = `<span class="badge bg-primary bg-opacity-25 text-primary border px-3 py-2 rounded-pill ms-1">${course.type || 'ไม่ระบุ'}</span>`;
       
       let formattedDuration = formatDurationDisplay(course.duration);
       let durationDisplay = formattedDuration ? `<div class="d-flex align-items-center mt-1"><i class="bi bi-calendar-range me-2"></i><span class="small fw-bold text-dark">ระยะคอร์ส:</span><span class="small text-muted ms-2">${formattedDuration}</span></div>` : '';
@@ -440,7 +466,7 @@ if (isset($_GET['action'])) {
     
     let monthText = course.month ? course.month : '-';
     let yearText = course.yearBE ? course.yearBE : '-';
-    let typeDisplayBadge = `<span class="badge bg-primary bg-opacity-25 text-primary border px-3 py-2 rounded-pill ms-1">${course.type || 'ไม่ระบุ'} (${monthText} ${yearText})</span>`;
+    let typeDisplayBadge = `<span class="badge bg-primary bg-opacity-25 text-primary border px-3 py-2 rounded-pill ms-1">${course.type || 'ไม่ระบุ'}</span>`;
     
     let formattedDurationDetail = formatDurationDisplay(course.duration);
     let durationHtml = '';

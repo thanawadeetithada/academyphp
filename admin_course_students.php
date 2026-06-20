@@ -4,14 +4,14 @@ require_once 'db.php';
 
 // ตรวจสอบสิทธิ์ ต้องเป็น admin เท่านั้น
 if (!isset($_SESSION['sessionRole']) || $_SESSION['sessionRole'] !== 'admin') {
-    header('Location: index.php');
-    exit;
+  header('Location: index.php');
+  exit;
 }
 
 // ตรวจสอบว่ามีการส่งรหัสคอร์สมาหรือไม่ หากไม่มีให้กลับไปหน้าจัดการคอร์ส
 if (empty($_GET['courseId'])) {
-    header('Location: admin_courses.php');
-    exit;
+  header('Location: admin_courses.php');
+  exit;
 }
 
 $courseId = $_GET['courseId'];
@@ -116,7 +116,7 @@ $courseName = $_GET['courseName'] ?? 'ไม่ระบุชื่อคอร
                 <th class="py-3 fw-bold border-0">ชั้น</th>
                 <th class="py-3 fw-bold border-0">โรงเรียน</th>
                 <th class="py-3 fw-bold border-0">เบอร์โทร</th>
-                <th class="py-3 fw-bold border-0 text-center">สถานะ</th>
+                <th class="py-3 fw-bold border-0 text-center">สถานะล่าสุด</th>
                 <th class="py-3 px-4 fw-bold border-0 text-center">จัดการ</th>
               </tr>
             </thead>
@@ -185,6 +185,26 @@ $courseName = $_GET['courseName'] ?? 'ไม่ระบุชื่อคอร
     </div>
   </div>
 
+  <div class="modal fade" id="deleteStudentModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content border-0 shadow rounded-4">
+        <div class="modal-header border-bottom-0 pb-0 pt-4 px-4">
+          <h5 class="modal-title fw-bold text-danger"><i class="bi bi-exclamation-triangle-fill me-2"></i>ยืนยันการลบข้อมูล</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body p-4 text-center">
+          <input type="hidden" id="deleteTargetUserId">
+          <p class="fs-6 mb-2 text-muted">คุณแน่ใจหรือไม่ว่าต้องการลบ?</p>
+          <p class="fs-5 fw-bold text-dark mb-4" id="deleteTargetStudentName">?</p>
+          <div class="d-flex justify-content-center gap-2 mt-2">
+            <button type="button" class="btn btn-light px-4 py-2 fw-medium border shadow-sm" data-bs-dismiss="modal">ยกเลิก</button>
+            <button type="button" class="btn btn-danger px-4 py-2 fw-medium shadow-sm" onclick="executeDeleteStudent()">ยืนยันการลบ</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="fullPageLoading" class="full-page-overlay">
     <div class="spinner-border text-secondary" style="width: 4rem; height: 4rem;" role="status">
       <span class="visually-hidden">Loading...</span>
@@ -196,7 +216,6 @@ $courseName = $_GET['courseName'] ?? 'ไม่ระบุชื่อคอร
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 
 <script>
-  // จุดเด่นคือ เรายังคงยิง API ไปที่หน้า admin_courses.php เหมือนเดิม
   const API_URL = 'admin_courses.php'; 
   
   let currentActiveCourseId = '<?php echo htmlspecialchars($courseId, ENT_QUOTES, 'UTF-8'); ?>'; 
@@ -204,6 +223,7 @@ $courseName = $_GET['courseName'] ?? 'ไม่ระบุชื่อคอร
 
   let addStudentModalInstance;
   let editStudentStatusModalInstance;
+  let deleteStudentModalInstance; 
   
   let availableStudentsData = [];
   let selectedStudentIds = []; 
@@ -235,10 +255,9 @@ $courseName = $_GET['courseName'] ?? 'ไม่ระบุชื่อคอร
   }
 
   document.addEventListener("DOMContentLoaded", function() {
-    viewCourseStudents(); // โหลดข้อมูลทันทีเมื่อเปิดหน้า
+    viewCourseStudents(); 
   });
 
-  // โหลดรายชื่อนักเรียนในคอร์ส
   function viewCourseStudents() {
     callAPI('getCourseStudents', { courseId: currentActiveCourseId }, 'GET').then(function(students) {
       displayCourseStudentsList(students);
@@ -254,13 +273,29 @@ $courseName = $_GET['courseName'] ?? 'ไม่ระบุชื่อคอร
       return;
     }
 
+    const uniqueStudents = [];
+    const seen = new Set();
+
+    students.forEach(student => {
+      // ดึง userId มาใช้งาน หรือ id ถ้า API เดิมยังไม่ได้แก้
+      const userId = student.userId || student.id; 
+      const uniqueKey = userId || student.fullName; 
+      
+      if (!seen.has(uniqueKey)) {
+        seen.add(uniqueKey);
+        // เก็บ userId ไว้ใน object student ด้วยเผื่อใช้
+        student.targetUserId = userId; 
+        uniqueStudents.push(student);
+      }
+    });
+
     const statusMap = {
       'pending_approval': { text: 'รออนุมัติ', class: 'bg-warning-subtle text-warning' },
       'approved': { text: 'อนุมัติแล้ว', class: 'bg-success-subtle text-success' },
       'rejected': { text: 'ปฏิเสธ', class: 'bg-danger-subtle text-danger' }
     };
 
-    students.forEach(student => {
+    uniqueStudents.forEach(student => {
       let stInfo = statusMap[student.status] || { text: student.status, class: 'bg-secondary-subtle text-secondary' };
       let statusBadge = `<span class="badge ${stInfo.class} px-3 py-2 rounded-pill">${stInfo.text}</span>`;
 
@@ -272,14 +307,14 @@ $courseName = $_GET['courseName'] ?? 'ไม่ระบุชื่อคอร
           <td class="py-3 text-nowrap">${student.phone}</td>
           <td class="py-3 text-center text-nowrap">${statusBadge}</td>
           <td class="px-4 py-3 text-center text-nowrap">
-            <button class="btn btn-sm btn-outline-primary" title="แก้ไขสถานะ" onclick="openEditStudentStatusModal('${student.id}', '${student.fullName}', '${student.status}')"><i class="bi bi-pencil-square me-1"></i> ปรับสถานะ</button>
+            <button class="btn btn-sm btn-outline-primary me-1" title="แก้ไขสถานะ" onclick="openEditStudentStatusModal('${student.id}', '${student.fullName}', '${student.status}')"><i class="bi bi-pencil-square me-1"></i> ปรับสถานะ</button>
+            <button class="btn btn-sm btn-outline-danger" title="ลบนักเรียนออกจากคอร์ส" onclick="confirmDeleteStudent('${student.targetUserId}', '${student.fullName}')"><i class="bi bi-trash"></i></button>
           </td>
         </tr>
       `;
     });
   }
 
-  // ==================== การจัดการสถานะ ====================
   function openEditStudentStatusModal(rowId, name, currentStatus) {
     document.getElementById('statusTargetStudentRowId').value = rowId;
     document.getElementById('statusTargetStudentName').innerText = name;
@@ -304,7 +339,43 @@ $courseName = $_GET['courseName'] ?? 'ไม่ระบุชื่อคอร
       });
   }
 
-  // ==================== การเพิ่มนักเรียน ====================
+  // ==================== การลบนักเรียนด้วย Modal (แบบส่ง userId) ====================
+  function confirmDeleteStudent(userId, studentName) {
+    document.getElementById('deleteTargetUserId').value = userId;
+    document.getElementById('deleteTargetStudentName').innerText = studentName;
+    
+    if(!deleteStudentModalInstance) {
+      deleteStudentModalInstance = new bootstrap.Modal(document.getElementById('deleteStudentModal'));
+    }
+    deleteStudentModalInstance.show();
+  }
+
+  function executeDeleteStudent() {
+    // ดึงค่า userId ที่ต้องการลบ
+    const userId = document.getElementById('deleteTargetUserId').value;
+    
+    deleteStudentModalInstance.hide();
+    deleteStudentEnrollment(userId);
+  }
+
+  function deleteStudentEnrollment(userId) {
+    showLoading('กำลังลบข้อมูล...');
+    
+    // ส่งข้อมูล userId และ courseId ไปให้ Backend จัดการตรรกะ
+    callAPI('softDeleteStudentCourse', { 
+        userId: userId, 
+        courseId: currentActiveCourseId 
+    }, 'POST')
+      .then(function(res) {
+        hideLoading();
+        if(res.success) {
+          viewCourseStudents(); 
+        } else {
+          alert('เกิดข้อผิดพลาดในการลบ: ' + res.message);
+        }
+      });
+  }
+
   function openAddStudentModal() {
     selectedStudentIds = [];
     document.getElementById('searchStudentInput').value = '';

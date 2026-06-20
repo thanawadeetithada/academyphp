@@ -215,7 +215,7 @@ if (isset($_GET['action'])) {
 
     <div id="newsTableView">
       <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4 gap-3">
-        <h4 class="fw-bold mb-0 text-dark"><i class="bi bi-megaphone text-primary me-2"></i>จัดการข่าวสารประกาศ</h4>
+        <h4 class="fw-bold mb-0 text-dark">จัดการข่าวสารประกาศ</h4>
         <button class="btn text-white px-4 shadow-sm text-nowrap" style="background-color: #2b4d7e; border-radius: 8px;" onclick="window.location.href='admin_news_form.php'">
           <i class="bi bi-plus-lg"></i> เพิ่มกลุ่มข่าวสาร
         </button>

@@ -26,25 +26,28 @@ if (isset($_GET['action'])) {
             
             // 1. ดึงข้อมูล Dashboard ของนักเรียน
             case 'getDashboardData':
-                // นับจำนวนคอร์สทั้งหมด
+                // นับจำนวนคอร์สทั้งหมด (เฉพาะที่ยังไม่ถูกลบ)
                 $totalCourses = 0;
-                $resTotal = $conn->query("SELECT COUNT(*) FROM courses");
+                $resTotal = $conn->query("SELECT COUNT(*) FROM courses WHERE deleted_at IS NULL");
                 if ($resTotal) {
                     $totalCourses = $resTotal->fetch_row()[0];
                 }
 
-                // ดึงข้อมูลการลงทะเบียนและคอร์สเรียน
+                // ดึงข้อมูลการลงทะเบียนและคอร์สเรียน (เฉพาะที่ยังไม่ถูกลบทั้งฝั่ง enrollments และ courses)
                 $myCoursesCount = 0;
                 $pendingApprovalCount = 0;
                 $pendingPaymentCount = 0;
                 $pendingVerifyCount = 0;
                 $totalStudentEnrollments = 0;
                 $enrolledCoursesList = [];
+                $addedCourseIds = []; // อาเรย์สำหรับเช็ค course_id ที่เพิ่มไปแล้วเพื่อไม่ให้แสดงซ้ำ
 
                 $sql = "SELECT e.approval_status, e.payment_status, c.course_id, c.name, c.level, c.price, c.details, c.days, c.time, c.duration 
                         FROM enrollments e 
                         JOIN courses c ON e.course_id = c.course_id 
-                        WHERE e.user_id = ?";
+                        WHERE e.user_id = ? 
+                        AND e.deleted_at IS NULL 
+                        AND c.deleted_at IS NULL";
                 $stmt = $conn->prepare($sql);
                 $stmt->execute([$userId]);
                 $enrolls = $stmt->get_result();
@@ -54,26 +57,32 @@ if (isset($_GET['action'])) {
                     $appStatus = $row['approval_status'];
                     $payStatus = $row['payment_status'];
 
-                    if ($appStatus === 'pending_approval' || $appStatus === 'pending_approval') {
+                    if ($appStatus === 'pending_approval' || $appStatus === 'รอการอนุมัติ') {
                         $pendingApprovalCount++;
                     } else if ($appStatus === 'อนุมัติแล้ว' || $appStatus === 'approved') {
-                        $myCoursesCount++;
                         
-                        // เก็บข้อมูลคอร์สที่กำลังเรียน
-                        $enrolledCoursesList[] = [
-                            'id' => $row['course_id'],
-                            'name' => $row['name'],
-                            'level' => $row['level'],
-                            'price' => $row['price'],
-                            'details' => $row['details'],
-                            'days' => $row['days'],
-                            'time' => $row['time'],
-                            'duration' => $row['duration']
-                        ];
+                        // เช็คว่า course_id นี้ถูกเพิ่มไปหรือยัง (เพื่อไม่ให้นับ/แสดงซ้ำใน คอร์สของฉัน และ คอร์สที่กำลังเรียน)
+                        if (!in_array($row['course_id'], $addedCourseIds)) {
+                            $myCoursesCount++;
+                            $addedCourseIds[] = $row['course_id'];
+                            
+                            // เก็บข้อมูลคอร์สที่กำลังเรียน
+                            $enrolledCoursesList[] = [
+                                'id' => $row['course_id'],
+                                'name' => $row['name'],
+                                'level' => $row['level'],
+                                'price' => $row['price'],
+                                'details' => $row['details'],
+                                'days' => $row['days'],
+                                'time' => $row['time'],
+                                'duration' => $row['duration']
+                            ];
+                        }
 
-                        if ($payStatus === 'pending_payment' || $payStatus === 'pending_payment') {
+                        // สถานะการชำระเงิน (นับทุกรายการไม่ว่าจะซ้ำคอร์สหรือไม่ เพราะแต่ละรายการคือแต่ละบิล/เดือน)
+                        if ($payStatus === 'pending_payment' || $payStatus === 'รอชำระเงิน') {
                             $pendingPaymentCount++;
-                        } else if ($payStatus === 'รอตรวจสอบ') {
+                        } else if ($payStatus === 'รอตรวจสอบ' || $payStatus === 'pending_verify') {
                             $pendingVerifyCount++;
                         }
                     }
@@ -118,7 +127,8 @@ if (isset($_GET['action'])) {
 
             // 2. ดึงข้อมูลส่วนตัว (Profile)
             case 'getProfile':
-                $stmt = $conn->prepare("SELECT * FROM users WHERE user_id = ?");
+                // กรอง deleted_at IS NULL เพื่อความปลอดภัย
+                $stmt = $conn->prepare("SELECT * FROM users WHERE user_id = ? AND deleted_at IS NULL");
                 $stmt->execute([$userId]);
                 $user = $stmt->get_result()->fetch_assoc();
                 
@@ -136,7 +146,7 @@ if (isset($_GET['action'])) {
                         'address' => $user['address']
                     ]);
                 } else {
-                    echo json_encode(['success' => false, 'message' => 'ไม่พบข้อมูล']);
+                    echo json_encode(['success' => false, 'message' => 'ไม่พบข้อมูล หรือบัญชีถูกระงับการใช้งาน']);
                 }
                 break;
 
@@ -154,10 +164,10 @@ if (isset($_GET['action'])) {
 
                 if (!empty($password)) {
                     $passHash = password_hash($password, PASSWORD_DEFAULT);
-                    $stmt = $conn->prepare("UPDATE users SET full_name=?, nickname=?, grade=?, school=?, phone=?, parent_name=?, parent_phone=?, address=?, password_hash=? WHERE user_id=?");
+                    $stmt = $conn->prepare("UPDATE users SET full_name=?, nickname=?, grade=?, school=?, phone=?, parent_name=?, parent_phone=?, address=?, password_hash=? WHERE user_id=? AND deleted_at IS NULL");
                     $stmt->execute([$fullName, $nickname, $level, $school, $phone, $parentName, $parentPhone, $address, $passHash, $userId]);
                 } else {
-                    $stmt = $conn->prepare("UPDATE users SET full_name=?, nickname=?, grade=?, school=?, phone=?, parent_name=?, parent_phone=?, address=? WHERE user_id=?");
+                    $stmt = $conn->prepare("UPDATE users SET full_name=?, nickname=?, grade=?, school=?, phone=?, parent_name=?, parent_phone=?, address=? WHERE user_id=? AND deleted_at IS NULL");
                     $stmt->execute([$fullName, $nickname, $level, $school, $phone, $parentName, $parentPhone, $address, $userId]);
                 }
                 
