@@ -25,7 +25,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'startNewMonth') {
     try {
         $conn->begin_transaction();
 
-        // 1. ดึง user_id ของนักเรียนทุกคนที่ผ่านการอนุมัติในคอร์สนี้ และต้องยังไม่ถูก Soft Delete (ดักทั้ง u.deleted_at และ e.deleted_at)
+        // 1. ดึง user_id ของนักเรียนทุกคนที่ผ่านการอนุมัติในคอร์สนี้ และต้องยังไม่ถูก Soft Delete
         $stmt = $conn->prepare("
             SELECT DISTINCT e.user_id 
             FROM enrollments e 
@@ -43,7 +43,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'startNewMonth') {
             throw new Exception("ไม่พบนักเรียนในคอร์สนี้ หรือนักเรียนถูกลบออกจากระบบหมดแล้ว");
         }
 
-        // 2. เช็คกันเหนียว: ตรวจสอบว่าใครที่เคยถูกสร้างบิลรอบเดือนนี้ไปแล้วบ้าง (ที่ยังไม่ถูกลบ)
+        // 2. เช็คกันเหนียว: ตรวจสอบว่าใครที่เคยถูกสร้างบิลรอบเดือนนี้ไปแล้วบ้าง
         $stmtCheck = $conn->prepare("
             SELECT e.user_id 
             FROM enrollments e 
@@ -79,7 +79,6 @@ if (isset($_GET['action']) && $_GET['action'] === 'startNewMonth') {
         
         if ($rowCourse) {
             $currentMonths = trim($rowCourse['course_month'] ?? '');
-            // เช็คว่ามีเดือนที่เลือกอยู่แล้วหรือยัง ถ้ายังให้ต่อท้าย
             $monthsArray = array_map('trim', explode(',', $currentMonths));
             if (!in_array($newMonth, $monthsArray)) {
                 $newMonthsStr = empty($currentMonths) ? $newMonth : $currentMonths . ', ' . $newMonth;
@@ -218,6 +217,7 @@ $currentMonthTh = $thaiMonths[date("m")];
         </div>
 
         <div class="d-flex align-items-center gap-2">
+           <?php if ($courseType === 'คอร์สกลุ่ม'): ?>
           <select id="monthDropdown" class="form-select shadow-sm fw-bold" style="min-width: 130px; border-radius: 8px;" onchange="loadStudentData()">
             <?php
             if (empty($monthsArray)) {
@@ -226,7 +226,6 @@ $currentMonthTh = $thaiMonths[date("m")];
                 $hasCurrentMonth = in_array($currentMonthTh, $monthsArray);
                 foreach ($monthsArray as $index => $m) {
                     $selected = '';
-                    // ถ้ามีเดือนปัจจุบันให้เลือกเดือนปัจจุบันก่อน ถ้าไม่มีให้เลือกเดือนแรกของ Array
                     if ($hasCurrentMonth && $m === $currentMonthTh) {
                         $selected = 'selected';
                     } elseif (!$hasCurrentMonth && $index === 0) {
@@ -238,7 +237,6 @@ $currentMonthTh = $thaiMonths[date("m")];
             ?>
           </select>
 
-          <?php if ($courseType === 'คอร์สกลุ่ม'): ?>
           <button class="btn btn-primary fw-bold px-4 py-2 shadow-sm rounded-pill text-nowrap" onclick="openNewMonthModal()">
             <i class="bi bi-calendar-plus me-2"></i> เริ่มรอบเดือนใหม่
           </button>
@@ -487,7 +485,6 @@ $currentMonthTh = $thaiMonths[date("m")];
       hideSlipLoading();
       if (data.success) {
         showSlipAlert(data.message, 'success');
-        // โหลดหน้าใหม่เพื่อให้ PHP อัปเดต Dropdown เลือกเดือนอันใหม่เข้ามา
         setTimeout(() => { window.location.reload(); }, 1500); 
       } else {
         showSlipAlert(data.message, 'error');
@@ -505,21 +502,23 @@ $currentMonthTh = $thaiMonths[date("m")];
   });
 
   function loadStudentData() {
-    const selectedMonth = document.getElementById('monthDropdown').value;
+    const monthDropdown = document.getElementById('monthDropdown');
+    let selectedMonth = monthDropdown ? monthDropdown.value : ''; 
     const tbody = document.getElementById('adminSlipsStudentsTableBody');
 
-    if (!selectedMonth) {
+    if (monthDropdown && !selectedMonth) {
         tbody.innerHTML = '<tr><td colspan="4" class="text-center py-5 text-muted">กรุณาสร้างรอบเดือนใหม่เพื่อดูข้อมูล</td></tr>';
         return;
     }
 
     tbody.innerHTML = '<tr><td colspan="4" class="text-center py-5 text-muted"><span class="spinner-border spinner-border-sm me-2"></span>กำลังโหลดข้อมูลนักเรียน...</td></tr>';
 
-    // ส่ง month เข้าไปที่ API ด้วย (API จะถูกเรียกไปที่ admin_slips.php)
     callAPI('getCourseStudentsForSlips', {courseId: currentSlipCourseId, month: selectedMonth}, 'GET').then(function(students) {
       if(students && !students.message) {
-        // ทำการ Filter ฝั่ง Frontend เพื่อคัดเฉพาะคนที่ตรงกับเดือนใน Dropdown (ป้องกันข้อมูลทั้งหมดโผล่มาพร้อมกัน)
-        let filteredStudents = students.filter(s => s.paidMonth === selectedMonth);
+        let filteredStudents = students;
+        if (monthDropdown) {
+             filteredStudents = students.filter(s => s.paidMonth === selectedMonth);
+        }
         
         currentSlipStudentsData = filteredStudents;
         displaySlipStudentsList(filteredStudents); 

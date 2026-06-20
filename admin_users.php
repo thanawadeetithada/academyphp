@@ -36,14 +36,12 @@ if (isset($_GET['action'])) {
 
             // 2. ดึงข้อมูลผู้ใช้งานทั้งหมด พร้อมคอร์สที่ลงทะเบียน
             case 'getAllUsers':
-                // ใช้ DISTINCT ภายใน GROUP_CONCAT เพื่อไม่ให้คอร์สแสดงซ้ำ
-                // และตรวจสอบ e.deleted_at IS NULL และ u.deleted_at IS NULL (เพื่อไม่ดึง User ที่โดนลบ)
                 $sql = "SELECT u.*, 
                                GROUP_CONCAT(DISTINCT c.course_id SEPARATOR ',') as course_ids, 
                                GROUP_CONCAT(DISTINCT c.name SEPARATOR ', ') as course_names 
                         FROM users u 
                         LEFT JOIN enrollments e ON u.user_id = e.user_id AND e.deleted_at IS NULL
-                        LEFT JOIN courses c ON e.course_id = c.course_id 
+                        LEFT JOIN courses c ON e.course_id = c.course_id AND c.deleted_at IS NULL
                         WHERE u.deleted_at IS NULL 
                         GROUP BY u.user_id 
                         ORDER BY u.created_at DESC";
@@ -263,7 +261,7 @@ if (isset($_GET['action'])) {
         <h4 class="fw-bold mb-0 text-dark text-nowrap">จัดการข้อมูลผู้ใช้งาน</h4>
         
         <div class="d-flex flex-column flex-sm-row gap-2 w-100 justify-content-md-end" style="max-width: 650px;">
-          <input type="text" class="form-control border-0 shadow-sm flex-grow-1" placeholder="ค้นหานักเรียน..." onkeyup="searchUsers(this.value)">
+          <input type="text" class="form-control border-0 shadow-sm flex-grow-1" placeholder="ค้นหา..." onkeyup="searchUsers(this.value)">
           <button class="btn text-white px-4 shadow-sm text-nowrap" style="background-color: #2b4d7e; border-radius: 8px;" onclick="openAddUser()">
             <i class="bi bi-plus-lg"></i> เพิ่ม
           </button>
@@ -294,7 +292,7 @@ if (isset($_GET['action'])) {
     <div id="userEditView" style="display: none;">
       <div class="d-flex align-items-center mb-4">
         <button class="btn me-1" onclick="closeEditForm()"><i class="bi bi-arrow-left fs-3"></i></button>
-        <h4 class="fw-bold mb-0 text-dark" id="editFormTitle">แก้ไขข้อมูลนักเรียน</h4>
+        <h4 class="fw-bold mb-0 text-dark" id="editFormTitle">แก้ไขข้อมูล</h4>
       </div>
 
       <div class="card border-0 shadow-sm rounded-4">

@@ -13,9 +13,8 @@ if (isset($_GET['action'])) {
 
     try {
         switch ($action) {
-            // 1. ดึงคอร์สเรียนมาแสดงในหน้าลงทะเบียน
             case 'getCourses':
-                $stmt = $conn->prepare("SELECT course_id as id, name, level, price, details FROM courses ORDER BY created_at DESC");
+                $stmt = $conn->prepare("SELECT course_id as id, name, level, price, details FROM courses WHERE deleted_at IS NULL ORDER BY created_at DESC");
                 $stmt->execute();
                 $result = $stmt->get_result();
                 $courses = [];
@@ -30,7 +29,7 @@ if (isset($_GET['action'])) {
                 $fullName = trim($data['fullName']);
                 $phone = trim($data['phone']);
 
-                // เช็คชื่อหรือเบอร์โทรซ้ำ
+                // เช็คชื่อหรือเบอร์โทรซ้ำ (ไม่ให้สมัครซ้ำ)
                 $stmt = $conn->prepare("SELECT user_id FROM users WHERE full_name = ? OR phone = ?");
                 $stmt->execute([$fullName, $phone]);
                 $res = $stmt->get_result();
