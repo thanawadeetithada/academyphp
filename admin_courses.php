@@ -87,11 +87,11 @@ if (isset($_GET['action'])) {
 
             case 'getCourseStudents':
                 $courseId = $_GET['courseId'];
-                // เพิ่มเงื่อนไข AND e.deleted_at IS NULL
+                // เพิ่มเงื่อนไข AND e.deleted_at IS NULL และ u.deleted_at IS NULL
                 $sql = "SELECT u.user_id, u.full_name, u.nickname, u.grade, u.school, u.phone, e.approval_status 
                         FROM users u 
                         JOIN enrollments e ON u.user_id = e.user_id 
-                        WHERE e.course_id = ? AND u.role != 'admin' AND e.deleted_at IS NULL";
+                        WHERE e.course_id = ? AND u.role != 'admin' AND e.deleted_at IS NULL AND u.deleted_at IS NULL";
                 $stmt = $conn->prepare($sql);
                 $stmt->execute([$courseId]);
                 $result = $stmt->get_result();
@@ -123,10 +123,10 @@ if (isset($_GET['action'])) {
 
             case 'getAvailableStudents':
                 $courseId = $_GET['courseId'];
-                // เช็คเฉพาะคอร์สที่ยังไม่โดน Soft Delete
+                // เพิ่มเงื่อนไข AND deleted_at IS NULL เพื่อไม่ดึงนักเรียนที่โดนลบมาแสดง
                 $sql = "SELECT user_id, full_name, nickname, grade, school, phone 
                         FROM users 
-                        WHERE role != 'admin' 
+                        WHERE role != 'admin' AND deleted_at IS NULL
                         AND user_id NOT IN (SELECT user_id FROM enrollments WHERE course_id = ? AND deleted_at IS NULL)";
                 $stmt = $conn->prepare($sql);
                 $stmt->execute([$courseId]);

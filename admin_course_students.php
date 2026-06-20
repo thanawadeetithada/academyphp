@@ -91,9 +91,6 @@ $courseName = $_GET['courseName'] ?? 'ไม่ระบุชื่อคอร
       <div class="d-flex align-items-center">
         <button class="btn btn-light btn-toggle-menu me-3 shadow-sm" onclick="toggleSidebar()"><i class="bi bi-list fs-4"></i></button>
       </div>
-      <div class="fw-bold text-primary align-self-start align-self-md-auto bg-primary bg-opacity-10 px-3 py-2 rounded">
-        <i class="bi bi-person-badge me-1"></i> ผู้ดูแลระบบ (<?php echo htmlspecialchars($_SESSION['sessionUser'] ?? 'Admin'); ?>)
-      </div>
     </div>
 
     <div id="courseStudentsView">
@@ -277,13 +274,11 @@ $courseName = $_GET['courseName'] ?? 'ไม่ระบุชื่อคอร
     const seen = new Set();
 
     students.forEach(student => {
-      // ดึง userId มาใช้งาน หรือ id ถ้า API เดิมยังไม่ได้แก้
       const userId = student.userId || student.id; 
       const uniqueKey = userId || student.fullName; 
       
       if (!seen.has(uniqueKey)) {
         seen.add(uniqueKey);
-        // เก็บ userId ไว้ใน object student ด้วยเผื่อใช้
         student.targetUserId = userId; 
         uniqueStudents.push(student);
       }
@@ -339,7 +334,6 @@ $courseName = $_GET['courseName'] ?? 'ไม่ระบุชื่อคอร
       });
   }
 
-  // ==================== การลบนักเรียนด้วย Modal (แบบส่ง userId) ====================
   function confirmDeleteStudent(userId, studentName) {
     document.getElementById('deleteTargetUserId').value = userId;
     document.getElementById('deleteTargetStudentName').innerText = studentName;
@@ -351,7 +345,6 @@ $courseName = $_GET['courseName'] ?? 'ไม่ระบุชื่อคอร
   }
 
   function executeDeleteStudent() {
-    // ดึงค่า userId ที่ต้องการลบ
     const userId = document.getElementById('deleteTargetUserId').value;
     
     deleteStudentModalInstance.hide();
@@ -361,7 +354,6 @@ $courseName = $_GET['courseName'] ?? 'ไม่ระบุชื่อคอร
   function deleteStudentEnrollment(userId) {
     showLoading('กำลังลบข้อมูล...');
     
-    // ส่งข้อมูล userId และ courseId ไปให้ Backend จัดการตรรกะ
     callAPI('softDeleteStudentCourse', { 
         userId: userId, 
         courseId: currentActiveCourseId 

@@ -23,7 +23,8 @@ if (isset($_GET['action'])) {
             
             // 1. ดึงรายการคอร์สทั้งหมดเพื่อแสดงในหน้าจัดการสลิป
             case 'getSlipsCourses':
-                $stmt = $conn->prepare("SELECT course_id as id, name, level, duration FROM courses ORDER BY created_at DESC");
+                // กรองคอร์สที่ถูก Soft Delete ออก
+                $stmt = $conn->prepare("SELECT course_id as id, name, level, duration FROM courses WHERE deleted_at IS NULL ORDER BY created_at DESC");
                 $stmt->execute();
                 $result = $stmt->get_result();
                 
@@ -34,11 +35,11 @@ if (isset($_GET['action'])) {
                 echo json_encode($courses);
                 break;
 
-            // 2. ดึงรายชื่อนักเรียนในคอร์ส เฉพาะคนที่อนุมัติแล้ว
+            // 2. ดึงรายชื่อนักเรียนในคอร์ส เฉพาะคนที่อนุมัติแล้ว และไม่ถูก Soft Delete
             case 'getCourseStudentsForSlips':
                 $courseId = $_GET['courseId'];
                 
-                // ค้นหานักเรียนใน enrollments และ join ข้อมูลจาก users, courses
+                // ค้นหานักเรียนใน enrollments และ join ข้อมูลจาก users, courses พร้อมเช็ค Soft Delete ทุกตารางที่เกี่ยวข้อง
                 $sql = "SELECT e.enroll_id, 
                                u.user_id, 
                                CONCAT(u.full_name, ' (', IFNULL(u.nickname, ''), ')') as student_name,
@@ -52,7 +53,10 @@ if (isset($_GET['action'])) {
                         JOIN users u ON e.user_id = u.user_id
                         JOIN courses c ON e.course_id = c.course_id
                         WHERE e.course_id = ? 
-                        AND e.approval_status IN ('approved', 'อนุมัติแล้ว')";
+                        AND e.approval_status IN ('approved', 'อนุมัติแล้ว')
+                        AND e.deleted_at IS NULL 
+                        AND u.deleted_at IS NULL 
+                        AND c.deleted_at IS NULL";
                 
                 $stmt = $conn->prepare($sql);
                 $stmt->execute([$courseId]);

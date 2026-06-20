@@ -25,7 +25,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'startNewMonth') {
     try {
         $conn->begin_transaction();
 
-        // 1. ดึง user_id ของนักเรียนทุกคนที่ผ่านการอนุมัติในคอร์สนี้ และยังไม่ถูก soft delete (เช็คทั้งตาราง enrollments และ users)
+        // 1. ดึง user_id ของนักเรียนทุกคนที่ผ่านการอนุมัติในคอร์สนี้ และต้องยังไม่ถูก Soft Delete (ดักทั้ง u.deleted_at และ e.deleted_at)
         $stmt = $conn->prepare("
             SELECT DISTINCT e.user_id 
             FROM enrollments e 
@@ -43,7 +43,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'startNewMonth') {
             throw new Exception("ไม่พบนักเรียนในคอร์สนี้ หรือนักเรียนถูกลบออกจากระบบหมดแล้ว");
         }
 
-        // 2. เช็คกันเหนียว: ตรวจสอบว่าใครที่เคยถูกสร้างบิลรอบเดือนนี้ไปแล้วบ้าง และยังไม่ถูกลบ
+        // 2. เช็คกันเหนียว: ตรวจสอบว่าใครที่เคยถูกสร้างบิลรอบเดือนนี้ไปแล้วบ้าง (ที่ยังไม่ถูกลบ)
         $stmtCheck = $conn->prepare("
             SELECT e.user_id 
             FROM enrollments e 
@@ -72,19 +72,21 @@ if (isset($_GET['action']) && $_GET['action'] === 'startNewMonth') {
         }
 
         // 4. อัปเดตเดือนในตาราง courses
-        $stmtCourse = $conn->prepare("SELECT course_month FROM courses WHERE course_id = ?");
+        $stmtCourse = $conn->prepare("SELECT course_month FROM courses WHERE course_id = ? AND deleted_at IS NULL");
         $stmtCourse->bind_param("s", $cId);
         $stmtCourse->execute();
         $rowCourse = $stmtCourse->get_result()->fetch_assoc();
-        $currentMonths = trim($rowCourse['course_month'] ?? '');
-
-        // เช็คว่ามีเดือนที่เลือกอยู่แล้วหรือยัง ถ้ายังให้ต่อท้าย
-        $monthsArray = array_map('trim', explode(',', $currentMonths));
-        if (!in_array($newMonth, $monthsArray)) {
-            $newMonthsStr = empty($currentMonths) ? $newMonth : $currentMonths . ', ' . $newMonth;
-            $stmtUpdCourse = $conn->prepare("UPDATE courses SET course_month = ? WHERE course_id = ?");
-            $stmtUpdCourse->bind_param("ss", $newMonthsStr, $cId);
-            $stmtUpdCourse->execute();
+        
+        if ($rowCourse) {
+            $currentMonths = trim($rowCourse['course_month'] ?? '');
+            // เช็คว่ามีเดือนที่เลือกอยู่แล้วหรือยัง ถ้ายังให้ต่อท้าย
+            $monthsArray = array_map('trim', explode(',', $currentMonths));
+            if (!in_array($newMonth, $monthsArray)) {
+                $newMonthsStr = empty($currentMonths) ? $newMonth : $currentMonths . ', ' . $newMonth;
+                $stmtUpdCourse = $conn->prepare("UPDATE courses SET course_month = ? WHERE course_id = ?");
+                $stmtUpdCourse->bind_param("ss", $newMonthsStr, $cId);
+                $stmtUpdCourse->execute();
+            }
         }
 
         $conn->commit();
@@ -107,14 +109,14 @@ if (empty($_GET['courseId'])) {
 
 $courseId = $_GET['courseId'];
 
-// ดึงข้อมูลคอร์สทั้งหมดเพื่อเช็ค course_type และ course_month
-$stmt = $conn->prepare("SELECT name, duration, course_type, course_month FROM courses WHERE course_id = ?");
+// ดึงข้อมูลคอร์สทั้งหมดเพื่อเช็ค course_type และ course_month (ดัก Soft Delete ด้วย)
+$stmt = $conn->prepare("SELECT name, duration, course_type, course_month FROM courses WHERE course_id = ? AND deleted_at IS NULL");
 $stmt->bind_param("s", $courseId);
 $stmt->execute();
 $courseResult = $stmt->get_result()->fetch_assoc();
 
 if (!$courseResult) {
-    header('Location: admin_slips.php');
+    echo "<script>alert('ไม่พบคอร์สเรียนนี้ หรือคอร์สถูกลบออกจากระบบแล้ว'); window.location.href='admin_slips.php';</script>";
     exit;
 }
 
