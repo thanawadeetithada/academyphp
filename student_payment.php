@@ -26,7 +26,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'getApprovedCoursesForPayment'
                 JOIN courses c ON e.course_id = c.course_id 
                 WHERE e.user_id = ? 
                   AND e.approval_status IN ('approved', 'อนุมัติแล้ว') 
-                  AND e.deleted_at IS NULL";
+                  AND e.deleted_at IS NULL
+                  AND c.deleted_at IS NULL";
         $stmt = $conn->prepare($sql);
         $stmt->execute([$userId]);
         $result = $stmt->get_result();
