@@ -72,12 +72,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
         }
 
         // 3. ดึงข้อมูลการลงทะเบียนและคำนวณรายได้/ค้างชำระ
-        // ดึง deleted_at ออกมาด้วยเพื่อนำมาคัดกรองฝั่ง PHP
+        // ดึง deleted_at และ e.net_price ออกมาด้วย
         $sqlEnroll = "
             SELECT 
                 u.full_name, 
                 c.name as course_name, 
                 c.price, 
+                e.net_price, 
                 e.approval_status, 
                 e.payment_status, 
                 COALESCE(e.approved_date, e.timestamp) as action_date,
@@ -93,7 +94,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
         if ($resEnroll) {
             while ($row = $resEnroll->fetch_assoc()) {
                 $status = $row['payment_status'];
-                $price = (float)$row['price'];
+                
+                // ตรรกะดึงราคา: ถ้ามีเน็ตไพรซ์ ให้ใช้เน็ตไพรซ์ ถ้ายังเป็น 0 (อาจจะบิลเก่า) ให้ใช้ราคาคอร์ส
+                $base_price = (float)$row['price'];
+                $net_price = isset($row['net_price']) ? (float)$row['net_price'] : 0;
+                $final_amount = ($net_price > 0) ? $net_price : $base_price;
                 
                 $actionDate = new DateTime($row['action_date']);
                 $dateKey = $actionDate->format('Y-m');
@@ -108,12 +113,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
                 $isCourseDeleted = !empty($row['course_deleted_at']);
                 $isEnrollDeleted = !empty($row['enroll_deleted_at']);
 
-                // ข้อมูลสำหรับ Export รายคอร์ส
+                // ข้อมูลสำหรับ Export รายคอร์ส (ใช้ $final_amount แทน)
                 $exportStatus = $isPaid ? 'ชำระเงินแล้ว' : ($isUnpaid ? 'รอชำระเงิน' : 'อื่นๆ');
-                $exportAmount = $isPaid ? $price : ($isUnpaid ? $price : 0);
+                $exportAmount = $isPaid ? $final_amount : ($isUnpaid ? $final_amount : 0);
                 
-                // กรองข้อมูล Export: รายการจ่ายแล้วเอามาทั้งหมด (ไม่สน soft delete) 
-                // แต่ถ้ารายการค้างจ่าย จะแสดงเฉพาะข้อมูลที่ยังไม่ถูก soft delete
+                // กรองข้อมูล Export
                 if ($isPaid || (!$isPaid && !$isUserDeleted && !$isCourseDeleted && !$isEnrollDeleted)) {
                     $response['exportData'][] = [
                         'courseName' => $row['course_name'],
@@ -124,25 +128,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
                     ];
                 }
 
-                // ถ้ายอดชำระเงินแล้ว (คำนวณรายได้เดือนนี้ และกราฟ 6 เดือน) -> ไม่เช็ค Soft Delete
+                // ถ้ายอดชำระเงินแล้ว (คำนวณรายได้เดือนนี้ และกราฟ 6 เดือน)
                 if ($isPaid) {
                     if ($dateKey === $currentMonthKey) {
-                        $response['currentMonthRevenue'] += $price;
+                        $response['currentMonthRevenue'] += $final_amount;
                     }
                     if (isset($chartDataMap[$dateKey])) {
-                        $chartDataMap[$dateKey] += $price;
+                        $chartDataMap[$dateKey] += $final_amount;
                     }
                 }
 
-                // ถ้ายอดค้างชำระ -> เช็ค Soft Delete (ยอดค้างชำระ + รายชื่อค้างจ่าย)
+                // ถ้ายอดค้างชำระ (ยอดค้างชำระ + รายชื่อค้างจ่าย)
                 if ($row['approval_status'] === 'approved' && $isUnpaid) {
-                    // กรองเฉพาะข้อมูลที่เกี่ยวข้องยังไม่ถูกลบ
                     if (!$isUserDeleted && !$isCourseDeleted && !$isEnrollDeleted) {
-                        $response['unpaidAmount'] += $price;
+                        $response['unpaidAmount'] += $final_amount;
                         $response['unpaidList'][] = [
                             'name' => $row['full_name'],
                             'course' => $row['course_name'],
-                            'amount' => $price
+                            'amount' => $final_amount
                         ];
                     }
                 }
@@ -354,7 +357,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
     unpaidTbody.innerHTML = '';
     
     if (data.unpaidList.length === 0) {
-      unpaidTbody.innerHTML = '<tr><td colspan="3" class="text-center py-5"><i class="bi bi-check-circle fs-3 d-block mb-2"></i>ไม่มีรายการค้างชำระ</td></tr>';
+      unpaidTbody.innerHTML = '<tr><td colspan="3" class="text-center py-5"><i class="bi bi-check-circle fs-3 d-block mb-2 text-success"></i>ไม่มีรายการค้างชำระ</td></tr>';
     } else {
       data.unpaidList.forEach(item => {
         unpaidTbody.innerHTML += `
@@ -451,7 +454,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
 
       for (let course in coursesGroup) {
         let courseSheetData = [
-          ["ชื่อนักเรียน", "ยอดเงิน (บาท)", "สถานะการชำระเงิน", "วันที่โอน"]
+          ["ชื่อนักเรียน", "ยอดเงินสุทธิ (บาท)", "สถานะการชำระเงิน", "วันที่โอน"]
         ];
         courseSheetData = courseSheetData.concat(coursesGroup[course]);
         let wsCourse = XLSX.utils.aoa_to_sheet(courseSheetData);

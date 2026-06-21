@@ -9,7 +9,7 @@ if (!isset($_SESSION['sessionRole']) || $_SESSION['sessionRole'] !== 'admin') {
 }
 
 // ==========================================
-// API: สร้างบิลรอบเดือนใหม่ให้นักเรียนทั้งคอร์ส
+// API 1: สร้างบิลรอบเดือนใหม่ให้นักเรียนทั้งคอร์ส
 // ==========================================
 if (isset($_GET['action']) && $_GET['action'] === 'startNewMonth') {
     header('Content-Type: application/json; charset=utf-8');
@@ -25,7 +25,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'startNewMonth') {
     try {
         $conn->begin_transaction();
 
-        // 1. ดึง user_id ของนักเรียนทุกคนที่ผ่านการอนุมัติในคอร์สนี้ และต้องยังไม่ถูก Soft Delete
+        // ดึง user_id ของนักเรียนทุกคนที่ผ่านการอนุมัติในคอร์สนี้
         $stmt = $conn->prepare("
             SELECT DISTINCT e.user_id 
             FROM enrollments e 
@@ -43,7 +43,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'startNewMonth') {
             throw new Exception("ไม่พบนักเรียนในคอร์สนี้ หรือนักเรียนถูกลบออกจากระบบหมดแล้ว");
         }
 
-        // 2. เช็คกันเหนียว: ตรวจสอบว่าใครที่เคยถูกสร้างบิลรอบเดือนนี้ไปแล้วบ้าง
+        // เช็คว่าใครที่เคยถูกสร้างบิลรอบเดือนนี้ไปแล้วบ้าง
         $stmtCheck = $conn->prepare("
             SELECT e.user_id 
             FROM enrollments e 
@@ -57,13 +57,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'startNewMonth') {
         $stmtCheck->execute();
         $existingUsers = array_column($stmtCheck->get_result()->fetch_all(MYSQLI_ASSOC), 'user_id');
 
-        // 3. เตรียมคำสั่ง Insert บิลใหม่
+        // เตรียมคำสั่ง Insert บิลใหม่
         $stmtInsert = $conn->prepare("INSERT INTO enrollments (enroll_id, user_id, course_id, approval_status, payment_status, paid_month) VALUES (?, ?, ?, 'approved', 'pending_payment', ?)");
 
         $insertedCount = 0;
         foreach ($users as $u) {
             if (!in_array($u['user_id'], $existingUsers)) {
-                // สร้างรหัส enroll_id ใหม่ (EN + timestamp สุ่ม)
                 $newEnrollId = uniqid('EN'); 
                 $stmtInsert->bind_param("ssss", $newEnrollId, $u['user_id'], $cId, $newMonth);
                 $stmtInsert->execute();
@@ -71,7 +70,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'startNewMonth') {
             }
         }
 
-        // 4. อัปเดตเดือนในตาราง courses
+        // อัปเดตเดือนในตาราง courses
         $stmtCourse = $conn->prepare("SELECT course_month FROM courses WHERE course_id = ? AND deleted_at IS NULL");
         $stmtCourse->bind_param("s", $cId);
         $stmtCourse->execute();
@@ -99,6 +98,101 @@ if (isset($_GET['action']) && $_GET['action'] === 'startNewMonth') {
 }
 
 // ==========================================
+// API 2: ดึงรายชื่อนักเรียนในคอร์สมาแสดงในตาราง 
+// ==========================================
+if (isset($_GET['action']) && $_GET['action'] === 'getCourseStudentsForSlips') {
+    header('Content-Type: application/json; charset=utf-8');
+    $cId = $_GET['courseId'] ?? '';
+    
+    try {
+        $sql = "SELECT e.*, u.full_name, u.nickname, c.price 
+                FROM enrollments e 
+                JOIN users u ON e.user_id = u.user_id 
+                JOIN courses c ON e.course_id = c.course_id 
+                WHERE e.course_id = ? 
+                AND e.approval_status IN ('approved', 'อนุมัติแล้ว')
+                AND e.deleted_at IS NULL AND u.deleted_at IS NULL
+                ORDER BY e.timestamp DESC";
+                
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("s", $cId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        $data = [];
+        while ($row = $result->fetch_assoc()) {
+            $payDate = '-';
+            $payTime = '-';
+            if (!empty($row['approved_date'])) {
+                $dt = new DateTime($row['approved_date']);
+                $year = (int)$dt->format('Y') + 543; // แปลงเป็น พ.ศ.
+                $payDate = $dt->format('d/m/') . $year;
+                $payTime = $dt->format('H:i') . ' น.';
+            }
+            
+            $data[] = [
+                'enrollId' => $row['enroll_id'],
+                'studentName' => $row['full_name'] . (!empty($row['nickname']) ? ' (' . $row['nickname'] . ')' : ''),
+                'paidMonth' => $row['paid_month'],
+                'paymentStatus' => $row['payment_status'],
+                'paymentMethod' => $row['payment_method'],
+                'slipUrl' => $row['slip_url'],
+                'payDate' => $payDate,
+                'payTime' => $payTime,
+                'netPrice' => (float)$row['net_price'],
+                'price' => (float)$row['price']
+            ];
+        }
+        echo json_encode($data);
+    } catch (Exception $e) {
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ==========================================
+// API 3: อัปเดตสถานะสลิป (อนุมัติ / ปฏิเสธ) 
+// ==========================================
+if (isset($_GET['action']) && $_GET['action'] === 'updateSlipPaymentStatus') {
+    header('Content-Type: application/json; charset=utf-8');
+    $input = json_decode(file_get_contents('php://input'), true);
+    $enrollId = $input['enrollId'] ?? '';
+    $newStatus = $input['newStatus'] ?? '';
+
+    if (!$enrollId || !$newStatus) {
+        echo json_encode(['success' => false, 'message' => 'ข้อมูลไม่ครบถ้วน']);
+        exit;
+    }
+
+    try {
+        if ($newStatus === 'pending_payment') {
+            // กรณีปฏิเสธสลิป ให้ล้างค่าทุกอย่างตามที่ต้องการ
+            $stmt = $conn->prepare("
+                UPDATE enrollments 
+                SET payment_status = ?, 
+                    slip_url = NULL, 
+                    approved_date = NULL,
+                    net_price = 0,
+                    paid_month = NULL,
+                    payment_method = NULL,
+                    include_other_expense = 0
+                WHERE enroll_id = ?
+            ");
+        } else {
+            // กรณีอนุมัติ
+            $stmt = $conn->prepare("UPDATE enrollments SET payment_status = ? WHERE enroll_id = ?");
+        }
+        $stmt->bind_param("ss", $newStatus, $enrollId);
+        $stmt->execute();
+        
+        echo json_encode(['success' => true]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ==========================================
 // ส่วนหน้าจอปกติ (UI)
 // ==========================================
 if (empty($_GET['courseId'])) {
@@ -108,7 +202,7 @@ if (empty($_GET['courseId'])) {
 
 $courseId = $_GET['courseId'];
 
-// ดึงข้อมูลคอร์สทั้งหมดเพื่อเช็ค course_type และ course_month (ดัก Soft Delete ด้วย)
+// ดึงข้อมูลคอร์สทั้งหมดเพื่อเช็ค course_type และ course_month
 $stmt = $conn->prepare("SELECT name, duration, course_type, course_month FROM courses WHERE course_id = ? AND deleted_at IS NULL");
 $stmt->bind_param("s", $courseId);
 $stmt->execute();
@@ -309,7 +403,7 @@ $currentMonthTh = $thaiMonths[date("m")];
                 <button class="btn btn-danger fw-bold px-4 py-2" style="border-radius: 8px;" onclick="promptUpdateSlipStatus('pending_payment')">
                   <i class="bi bi-x-circle me-1"></i> ปฏิเสธ (ให้ชำระใหม่)
                 </button>
-                <button class="btn btn-success fw-bold px-4 py-2" style="border-radius: 8px;" onclick="promptUpdateSlipStatus('paid')">
+                <button class="btn btn-success fw-bold px-4 py-2" style="border-radius: 8px;" onclick="promptUpdateSlipStatus('approval_payment')">
                   <i class="bi bi-check-circle me-1"></i> อนุมัติการชำระเงิน
                 </button>
               </div>
@@ -388,22 +482,19 @@ $currentMonthTh = $thaiMonths[date("m")];
 </div>
 
 <div id="slipFullPageLoading" class="full-page-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(255,255,255,0.8); z-index: 9999; flex-direction: column; justify-content: center; align-items: center;">
-  <div class="spinner-border text-primary" style="width: 4rem; height: 4rem;" role="status">
-    <span class="visually-hidden">Loading...</span>
-  </div>
+  <div class="spinner-border text-primary" style="width: 4rem; height: 4rem;" role="status"></div>
   <h4 class="mt-3 fw-bold text-primary" id="slipLoadingText">กำลังประมวลผล...</h4>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 
 <script>
-  const API_URL = 'admin_slips.php';
+  const API_URL = 'admin_slip_students.php';
 
   let currentSlipCourseId = '<?php echo htmlspecialchars($courseId, ENT_QUOTES, 'UTF-8'); ?>';
   let currentSlipCourseName = '<?php echo htmlspecialchars($courseName, ENT_QUOTES, 'UTF-8'); ?>';
   let currentSlipStudentsData = [];
 
-  // --- API Call Helper ---
   async function callAPI(action, data = null, method = 'POST') {
     try {
       let url = `${API_URL}?action=${action}`;
@@ -458,7 +549,6 @@ $currentMonthTh = $thaiMonths[date("m")];
     modal.show();
   }
 
-  // --- จัดการปุ่ม สร้างรอบเดือนใหม่ ---
   function openNewMonthModal() {
     const modal = new bootstrap.Modal(document.getElementById('newMonthModal'));
     modal.show();
@@ -496,7 +586,6 @@ $currentMonthTh = $thaiMonths[date("m")];
     });
   }
 
-  // --- Load Data เพื่อแสดงตาราง ---
   document.addEventListener("DOMContentLoaded", function() {
     loadStudentData();
   });
@@ -514,7 +603,7 @@ $currentMonthTh = $thaiMonths[date("m")];
     tbody.innerHTML = '<tr><td colspan="4" class="text-center py-5 text-muted"><span class="spinner-border spinner-border-sm me-2"></span>กำลังโหลดข้อมูลนักเรียน...</td></tr>';
 
     callAPI('getCourseStudentsForSlips', {courseId: currentSlipCourseId, month: selectedMonth}, 'GET').then(function(students) {
-      if(students && !students.message) {
+      if(students && !students.message && !students.error) {
         let filteredStudents = students;
         if (monthDropdown) {
              filteredStudents = students.filter(s => s.paidMonth === selectedMonth);
@@ -576,7 +665,6 @@ $currentMonthTh = $thaiMonths[date("m")];
     });
   }
 
-  // --- ดูข้อมูล ---
   function viewSlipDetail(enrollId) {
     const student = currentSlipStudentsData.find(s => s.enrollId === enrollId);
     if(!student) return;
@@ -587,8 +675,20 @@ $currentMonthTh = $thaiMonths[date("m")];
     document.getElementById('slipDetailDate').innerText = student.payDate || '-';
     document.getElementById('slipDetailTime').innerText = student.payTime || '-';
     
+    // ตั้งระบบ Fallback ดึงราคาให้ฉลาดขึ้น 
+    let finalAmount = 0;
+    if (student.netPrice && student.netPrice > 0) {
+        finalAmount = student.netPrice;
+    } else if (student.net_price && student.net_price > 0) {
+        finalAmount = student.net_price;
+    } else if (student.amount && student.amount > 0) {
+        finalAmount = student.amount;
+    } else if (student.price && student.price > 0) {
+        finalAmount = student.price;
+    }
+
     const amountElem = document.getElementById('slipDetailAmount');
-    if(amountElem) amountElem.innerText = (student.amount ? Number(student.amount).toLocaleString() : '0') + ' ฿';
+    if(amountElem) amountElem.innerText = Number(finalAmount).toLocaleString() + ' ฿';
 
     const buttonsContainer = document.getElementById('slipActionButtonsContainer');
     if (student.paymentStatus === 'paid' || student.paymentStatus === 'approval_payment') {
@@ -642,7 +742,6 @@ $currentMonthTh = $thaiMonths[date("m")];
     window.scrollTo(0, 0);
   }
 
-  // --- อัปเดตสถานะ ---
   function promptUpdateSlipStatus(newStatus) {
     document.getElementById('tempSlipStatusToUpdate').value = newStatus;
     let msg = newStatus === 'paid' ? 'ยืนยันว่านักเรียนชำระเงินครบถ้วน ถูกต้องใช่หรือไม่?' : 'ต้องการปฏิเสธ และให้นักเรียนแจ้งชำระเงินใหม่ใช่หรือไม่? <br>(ข้อมูลสลิปเดิมจะถูกล้าง)';

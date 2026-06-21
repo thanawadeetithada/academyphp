@@ -117,13 +117,7 @@ if (!empty($billing['approved_date'])) {
               </div>
               
               <?php 
-                // ดึงยอดเงินสุทธิมาแสดงให้ถูกต้อง (ถ้ามีค่าใช้จ่ายเสริมให้บวกเข้าไปด้วยในกรณีที่ยังไม่มี column amount)
-                $amountDisplay = 0;
-                if(isset($billing['amount']) && $billing['amount'] > 0){
-                    $amountDisplay = $billing['amount'];
-                } else {
-                    $amountDisplay = floatval($billing['price']) + floatval($billing['other_expense_price']);
-                }
+                $amountDisplay = (!empty($billing['net_price']) && $billing['net_price'] > 0) ? $billing['net_price'] : floatval($billing['price']);
               ?>
               <hr class="text-muted">
               <div class="d-flex justify-content-between align-items-center">
@@ -141,8 +135,8 @@ if (!empty($billing['approved_date'])) {
                     <p class="text-muted small mb-0">ชำระด้วยเงินสดที่สถาบันเรียบร้อยแล้ว</p>
                   </div>
                 <?php else: ?>
-                  <a href="<?= $billing['slip_url'] ?>" target="_blank">
-                    <img src="<?= $billing['slip_url'] ?>" style="max-width: 100%; max-height: 350px; object-fit: contain; border-radius: 8px;">
+                  <a href="<?= htmlspecialchars($billing['slip_url']) ?>" target="_blank">
+                    <img src="<?= htmlspecialchars($billing['slip_url']) ?>" style="max-width: 100%; max-height: 350px; object-fit: contain; border-radius: 8px;">
                   </a>
                 <?php endif; ?>
               </div>

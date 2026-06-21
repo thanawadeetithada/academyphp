@@ -26,8 +26,8 @@ if (isset($_GET['action'])) {
             
             // 1. ดึงข้อมูลคอร์สทั้งหมด พร้อมเช็คสถานะการลงทะเบียนของนักเรียนคนนี้
             case 'getAllCoursesForStudent':
-                // เพิ่มเงื่อนไข WHERE c.deleted_at IS NULL และ AND e.deleted_at IS NULL
-                $sql = "SELECT c.*, e.approval_status 
+                // เพิ่มการดึง e.net_price ออกมาด้วย
+                $sql = "SELECT c.*, e.approval_status, e.net_price 
                         FROM courses c 
                         LEFT JOIN enrollments e ON c.course_id = e.course_id AND e.user_id = ? AND e.deleted_at IS NULL
                         WHERE c.deleted_at IS NULL
@@ -64,6 +64,7 @@ if (isset($_GET['action'])) {
                         'name' => $row['name'],
                         'level' => $row['level'],
                         'price' => $row['price'],
+                        'netPrice' => isset($row['net_price']) ? (float)$row['net_price'] : 0, // ส่งค่า net_price ไปให้ JS
                         'details' => $row['details'],
                         'otherExpenseName' => $row['other_expense_name'] ?? '',
                         'otherExpensePrice' => (float)($row['other_expense_price'] ?? 0),
@@ -112,8 +113,7 @@ if (isset($_GET['action'])) {
                     $row = $res->fetch_assoc();
                     $status = $row['approval_status'];
                     
-                    if ($status === 'pending_approval' || $status === 'pending_approval') {
-                        // เปลี่ยนจาก DELETE แถวเป็น Soft Delete แทนก็ได้ หรือ DELETE ถาวร (ในที่นี้ใช้ DELETE ตามเดิม)
+                    if ($status === 'pending_approval') {
                         $delStmt = $conn->prepare("DELETE FROM enrollments WHERE user_id = ? AND course_id = ? AND approval_status = 'pending_approval'");
                         $delStmt->execute([$userId, $courseId]);
                         echo json_encode(['success' => true]);
@@ -211,7 +211,7 @@ if (isset($_GET['action'])) {
 
   <main class="main-content pb-5" style="background-color: #f4f6f9;">
     <div class="d-lg-none mb-3">
-      <button class="btn btn-light btn-toggle-menu shadow-sm" onclick="toggleSidebar()"><i class="bi bi-list fs-4"></i></button>
+      <button class="btn btn-light shadow-sm" onclick="toggleSidebar()"><i class="bi bi-list fs-4"></i></button>
     </div>
 
     <div id="studentCourseGridView">
@@ -315,7 +315,6 @@ if (isset($_GET['action'])) {
     if (!durationStr) return '';
     let str = String(durationStr);
 
-    // เช็คกรณีเป็น Date String แบบยาว 
     const dateStringRegex = /^[A-Za-z]{3}\s([A-Za-z]{3})\s(\d{1,2})\s(\d{4})/;
     let match = str.match(dateStringRegex);
     if (match) {
@@ -330,7 +329,6 @@ if (isset($_GET['action'])) {
       return `${day}/${month}/${year}`;
     }
 
-    // แปลง YYYY-MM-DD แบบ SQL เป็น วว/ดด/ปปปป (พ.ศ.) กรณีที่มีการเปลี่ยนการเก็บใน DB
     const sqlDateRegex = /^(\d{4})-(\d{2})-(\d{2})$/;
     let sqlMatch = str.match(sqlDateRegex);
     if (sqlMatch) {
@@ -353,9 +351,6 @@ if (isset($_GET['action'])) {
     callAPI('getAllCoursesForStudent').then(courses => {
       if(courses && !courses.message) {
         
-        // -------------------------------------------------------------
-        // กรองข้อมูลไม่ให้คอร์สแสดงซ้ำที่หน้าจอ (Deduplicate ฝั่ง Frontend)
-        // -------------------------------------------------------------
         const uniqueCourses = [];
         const seen = new Set();
         
@@ -388,9 +383,6 @@ if (isset($_GET['action'])) {
       
       let displayDays = course.days ? course.days : '-';
       let displayTime = course.time ? course.time : '-';
-      
-      let monthText = course.month ? course.month : '-';
-      let yearText = course.yearBE ? course.yearBE : '-';
       let typeDisplayBadge = `<span class="badge bg-primary bg-opacity-25 text-primary border px-3 py-2 rounded-pill ms-1">${course.type || 'ไม่ระบุ'}</span>`;
       
       let formattedDuration = formatDurationDisplay(course.duration);
@@ -398,6 +390,17 @@ if (isset($_GET['action'])) {
       
       let safeCourseName = course.name ? String(course.name).replace(/'/g, "\\'").replace(/"/g, '"') : '';
       
+      // การตั้งค่าราคาที่จะแสดงตามสถานะ
+      let displayPrice = course.price;
+      let priceLabel = 'ราคา';
+      let priceColorClass = 'text-primary';
+
+      if (course.studentStatus === 'อนุมัติแล้ว' && course.netPrice > 0) {
+          displayPrice = course.netPrice;
+          priceLabel = 'ราคาสุทธิ (ชำระแล้ว)';
+          priceColorClass = 'text-success'; // เปลี่ยนสีให้เห็นชัดว่าจ่ายแล้ว
+      }
+
       let actionButtonHtml = '';
       if (course.studentStatus === 'not_registered') {
         actionButtonHtml = `<button class="btn btn-primary w-100 fw-bold" style="border-radius: 8px;" onclick="promptRegisterCourse('${course.id}', '${safeCourseName}'); event.stopPropagation();"><i class="bi bi-pencil-square me-1"></i> ลงทะเบียนเรียน</button>`;
@@ -441,8 +444,8 @@ if (isset($_GET['action'])) {
               </div>
 
               <div class="d-flex justify-content-between align-items-center mb-4 p-3 rounded-3" style="background-color: #e2e8f0;">
-                <span class="text-muted small fw-bold">ราคา</span>
-                <span class="fw-bold fs-5 text-primary">${Number(course.price).toLocaleString()} ฿</span>
+                <span class="text-muted small fw-bold">${priceLabel}</span>
+                <span class="fw-bold fs-5 ${priceColorClass}">${Number(displayPrice).toLocaleString()} ฿</span>
               </div>
               
               <div class="mt-auto">
@@ -463,9 +466,6 @@ if (isset($_GET['action'])) {
     let detailsText = course.details ? course.details : '<span class="text-muted">ไม่มีรายละเอียดเพิ่มเติม</span>';
     let displayDays = course.days ? course.days : 'ไม่ระบุ';
     let displayTime = course.time ? course.time : 'ไม่ระบุ';
-    
-    let monthText = course.month ? course.month : '-';
-    let yearText = course.yearBE ? course.yearBE : '-';
     let typeDisplayBadge = `<span class="badge bg-primary bg-opacity-25 text-primary border px-3 py-2 rounded-pill ms-1">${course.type || 'ไม่ระบุ'}</span>`;
     
     let formattedDurationDetail = formatDurationDisplay(course.duration);
@@ -490,14 +490,36 @@ if (isset($_GET['action'])) {
       actionButtonHtml = `<button class="btn btn-danger btn-lg w-100 fw-bold rounded-3 py-2" disabled><i class="bi bi-x-circle me-2"></i> คำขอถูกปฏิเสธ</button>`;
     }
 
-    let otherExpenseHtml = '';
-    if (course.otherExpenseName && course.otherExpensePrice > 0) {
-      otherExpenseHtml = `
-        <div class="d-flex justify-content-between align-items-center bg-white border p-3 rounded-3 mt-3">
-           <div><span class="text-muted small fw-bold d-block">ค่าใช้จ่ายอื่นๆ</span><span class="fw-bold">${course.otherExpenseName}</span></div>
-           <span class="fs-5 fw-bold text-info">+${Number(course.otherExpensePrice).toLocaleString()} ฿</span>
-        </div>
-      `;
+    // จัดการส่วนแสดงราคาในหน้า Detail
+    let priceSectionHtml = '';
+    
+    if (course.studentStatus === 'อนุมัติแล้ว' && course.netPrice > 0) {
+        // ถ้าอนุมัติแล้ว โชว์กล่องราคาสุทธิกล่องเดียว
+        priceSectionHtml = `
+            <div class="d-flex justify-content-between align-items-center bg-white border border-success p-3 rounded-3">
+               <span class="fw-bold text-success">ราคาสุทธิ (ชำระแล้ว)</span>
+               <span class="fs-4 fw-bold text-success">${Number(course.netPrice).toLocaleString()} ฿</span>
+            </div>
+        `;
+    } else {
+        // ถ้ายังไม่อนุมัติ โชว์ราคาตั้งต้น + บริการเสริม
+        let otherExpenseHtml = '';
+        if (course.otherExpenseName && course.otherExpensePrice > 0) {
+          otherExpenseHtml = `
+            <div class="d-flex justify-content-between align-items-center bg-white border p-3 rounded-3 mt-3">
+               <div><span class="text-muted small fw-bold d-block">ค่าใช้จ่ายอื่นๆ (ทางเลือก)</span><span class="fw-bold">${course.otherExpenseName}</span></div>
+               <span class="fs-5 fw-bold text-info">+${Number(course.otherExpensePrice).toLocaleString()} ฿</span>
+            </div>
+          `;
+        }
+        
+        priceSectionHtml = `
+            <div class="d-flex justify-content-between align-items-center bg-white border p-3 rounded-3">
+               <span class="fw-bold text-muted">ราคาคอร์สเรียน</span>
+               <span class="fs-4 fw-bold text-primary">${Number(course.price).toLocaleString()} ฿</span>
+            </div>
+            ${otherExpenseHtml}
+        `;
     }
 
     const detailHtml = `
@@ -529,11 +551,7 @@ if (isset($_GET['action'])) {
 
       <div class="mb-5">
         <h6 class="fw-bold text-dark mb-3"><i class="bi bi-wallet2 me-2 text-primary"></i>ค่าใช้จ่าย</h6>
-        <div class="d-flex justify-content-between align-items-center bg-white border p-3 rounded-3">
-           <span class="fw-bold text-muted">ราคาคอร์สเรียน</span>
-           <span class="fs-4 fw-bold text-primary">${Number(course.price).toLocaleString()} ฿</span>
-        </div>
-        ${otherExpenseHtml}
+        ${priceSectionHtml}
       </div>
 
       <div>

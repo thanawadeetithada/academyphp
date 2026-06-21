@@ -39,7 +39,6 @@ if (isset($_GET['action']) && $_GET['action'] === 'getApprovedCoursesForPayment'
             $pStatus = $row['payment_status'];
             
             // กรองเฉพาะรายการที่ยังไม่ได้ชำระ หรือ รอตรวจสอบสลิป
-            // (เอา approval_payment ออกแล้ว เพื่อให้ card หายไปเมื่อแอดมินอนุมัติสลิป)
             if (empty($pStatus) || $pStatus === 'pending_payment' || $pStatus === 'รอชำระเงิน' || $pStatus === 'รอตรวจสอบ') {
                 
                 // เช็คว่ามีการแนบสลิปหรือระบุว่าจ่ายเงินสดมาแล้วหรือยัง
@@ -54,6 +53,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'getApprovedCoursesForPayment'
                     'courseName' => $row['name'],
                     'level' => $row['level'],
                     'price' => $row['price'],
+                    'netPrice' => !empty($row['net_price']) ? $row['net_price'] : 0, // เพิ่มการดึง net_price จาก DB
                     'otherExpenseName' => $row['other_expense_name'] ?? '',
                     'otherExpensePrice' => (float)($row['other_expense_price'] ?? 0),
                     'paymentStatus' => 'pending_payment', 
@@ -152,11 +152,20 @@ if (isset($_GET['action']) && $_GET['action'] === 'getApprovedCoursesForPayment'
           let safeName = encodeURIComponent(course.courseName);
           let safeMonth = encodeURIComponent(course.monthYearText);
           let safeExpName = encodeURIComponent(course.otherExpenseName);
+          let displayPrice = course.price;
+          let priceLabel = 'ยอดเริ่มต้นที่ต้องชำระ';
 
           if (course.hasPayment) {
             topBorderClass = 'bg-warning';
             badgeHtml = `<span class="badge bg-warning-subtle px-3 py-2 rounded-pill" style="color: rgb(255, 133, 7) !important;"><i class="bi bi-hourglass-split me-1"></i>รอตรวจสอบ</span>`;
             btnHtml = `<button class="btn btn-warning text-dark w-100 fw-bold shadow-sm py-2" style="border-radius: 8px;" onclick="window.location.href='student_payment_pending.php?enrollId=${course.enrollId}'"><i class="bi bi-search me-1"></i> ดูรายละเอียด</button>`;
+            
+            // ถ้าแจ้งชำระแล้ว และมี net_price ให้แสดงยอดสุทธิแทน
+            if (course.netPrice > 0) {
+                displayPrice = course.netPrice;
+                priceLabel = 'ยอดที่แจ้งชำระ';
+            }
+
           } else {
             let isMonthly = course.monthYearText && course.monthYearText !== 'รายครั้ง';
             let badgeText = isMonthly ? `บิลใหม่รอบเดือน (${course.monthYearText})` : 'รอชำระเงิน';
@@ -176,8 +185,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'getApprovedCoursesForPayment'
                   </div>
                   <h5 class="fw-bold mb-3 text-dark">${course.courseName}</h5>
                   <div class="d-flex justify-content-between align-items-center mb-4 p-3 rounded-3" style="background-color: #f8faff;">
-                    <span class="text-muted small fw-bold">ยอดเริ่มต้นที่ต้องชำระ</span>
-                    <span class="fw-bold fs-5 text-primary">${Number(course.price).toLocaleString()} ฿</span>
+                    <span class="text-muted small fw-bold">${priceLabel}</span>
+                    <span class="fw-bold fs-5 text-primary">${Number(displayPrice).toLocaleString()} ฿</span>
                   </div>
                   <div class="mt-auto">${btnHtml}</div>
                 </div>

@@ -17,6 +17,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
     try {
         $isNewRow = $data['isNewRow'] === true || $data['isNewRow'] === 'true';
         $slipUrl = "";
+        
+        $netPrice = isset($data['amount']) ? (float)$data['amount'] : 0;
+        $includeOtherExpense = !empty($data['includeOtherExpense']) ? 1 : 0;
 
         if (!empty($data['slipFile']) && !empty($data['slipFile']['base64'])) {
             if (!is_dir('uploads/slips')) { mkdir('uploads/slips', 0777, true); }
@@ -32,18 +35,20 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
 
         if ($isNewRow) {
             $enrollId = 'EN' . time() . rand(10, 99);
-            $sql = "INSERT INTO enrollments (enroll_id, user_id, course_id, approval_status, payment_status, approved_date, slip_url, paid_month, payment_method) 
-                    VALUES (?, ?, ?, 'approved', 'pending_payment', ?, ?, ?, ?)";
+            $sql = "INSERT INTO enrollments (enroll_id, user_id, course_id, approval_status, payment_status, approved_date, slip_url, paid_month, payment_method, include_other_expense, net_price) 
+                    VALUES (?, ?, ?, 'approved', 'pending_payment', ?, ?, ?, ?, ?, ?)";
             $stmt = $conn->prepare($sql);
-            $stmt->execute([$enrollId, $userId, $data['courseId'], $appDate, $slipUrl, $data['paidForMonth'], $data['paymentMethod']]);
+            $stmt->execute([$enrollId, $userId, $data['courseId'], $appDate, $slipUrl, $data['paidForMonth'], $data['paymentMethod'], $includeOtherExpense, $netPrice]);
         } else {
             $enrollId = $data['enrollId'];
             if (!empty($slipUrl)) {
-                $sql = "UPDATE enrollments SET payment_status='pending_payment', approved_date=?, slip_url=?, paid_month=?, payment_method=? WHERE enroll_id=?";
-                $stmt = $conn->prepare($sql); $stmt->execute([$appDate, $slipUrl, $data['paidForMonth'], $data['paymentMethod'], $enrollId]);
+                $sql = "UPDATE enrollments SET payment_status='pending_payment', approved_date=?, slip_url=?, paid_month=?, payment_method=?, include_other_expense=?, net_price=? WHERE enroll_id=?";
+                $stmt = $conn->prepare($sql); 
+                $stmt->execute([$appDate, $slipUrl, $data['paidForMonth'], $data['paymentMethod'], $includeOtherExpense, $netPrice, $enrollId]);
             } else {
-                $sql = "UPDATE enrollments SET payment_status='pending_payment', approved_date=?, paid_month=?, payment_method=? WHERE enroll_id=?";
-                $stmt = $conn->prepare($sql); $stmt->execute([$appDate, $data['paidForMonth'], $data['paymentMethod'], $enrollId]);
+                $sql = "UPDATE enrollments SET payment_status='pending_payment', approved_date=?, paid_month=?, payment_method=?, include_other_expense=?, net_price=? WHERE enroll_id=?";
+                $stmt = $conn->prepare($sql); 
+                $stmt->execute([$appDate, $data['paidForMonth'], $data['paymentMethod'], $includeOtherExpense, $netPrice, $enrollId]);
             }
         }
         echo json_encode(['success' => true]);
@@ -185,7 +190,6 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
   const basePrice = parseFloat(urlParams.get('price')) || 0;
   const otherPrice = parseFloat(urlParams.get('otherExpensePrice')) || 0;
 
-  // ฟังก์ชันสำหรับแปลงวันที่ ค.ศ. (YYYY-MM-DD) เป็นรูปแบบ พ.ศ. (DD MMMM YYYY)
   function updateDateDisplay() {
     const dateVal = document.getElementById('payDate').value;
     if (!dateVal) {
@@ -196,7 +200,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
     const day = d.getDate();
     const months = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
     const month = months[d.getMonth()];
-    const yearBE = d.getFullYear() + 543; // บวก 543 เพื่อให้เป็น พ.ศ.
+    const yearBE = d.getFullYear() + 543;
     
     document.getElementById('payDateDisplay').value = `${day} ${month} ${yearBE}`;
   }
@@ -218,7 +222,6 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
     
     updateTotalAmount();
     
-    // ตั้งค่าวันที่ปัจจุบัน และอัปเดตช่องแสดงผล พ.ศ.
     const now = new Date();
     now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
     document.getElementById('payDate').value = now.toISOString().split('T')[0];
@@ -244,11 +247,20 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
     document.getElementById('fullPageLoading').classList.add('show');
     
     const fileInput = document.getElementById('paySlipFile');
+    
+    const isExpenseChecked = document.getElementById('otherExpenseCheck') ? document.getElementById('otherExpenseCheck').checked : false;
+
     const payload = {
-      enrollId: urlParams.get('enrollId'), courseId: urlParams.get('courseId'), isNewRow: urlParams.get('isNewRow'),
-      paymentDate: document.getElementById('payDate').value, paymentTime: document.getElementById('payTime').value,
-      amount: document.getElementById('payAmount').value, paymentMethod: document.querySelector('input[name="paymentMethod"]:checked').value,
-      paidForMonth: document.getElementById('payForMonth').value || 'รายครั้ง', slipFile: null
+      enrollId: urlParams.get('enrollId'), 
+      courseId: urlParams.get('courseId'), 
+      isNewRow: urlParams.get('isNewRow'),
+      paymentDate: document.getElementById('payDate').value, 
+      paymentTime: document.getElementById('payTime').value,
+      amount: document.getElementById('payAmount').value, 
+      includeOtherExpense: isExpenseChecked ? 1 : 0,
+      paymentMethod: document.querySelector('input[name="paymentMethod"]:checked').value,
+      paidForMonth: document.getElementById('payForMonth').value || 'รายครั้ง', 
+      slipFile: null
     };
 
     if (fileInput.files.length > 0) {
