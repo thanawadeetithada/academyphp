@@ -113,6 +113,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
                 $isCourseDeleted = !empty($row['course_deleted_at']);
                 $isEnrollDeleted = !empty($row['enroll_deleted_at']);
 
+                $exportCourseName = $row['course_name'];
+                if ($isCourseDeleted) {
+                    $exportCourseName .= ' (ลบคอร์ส)';
+                }
+
                 // ข้อมูลสำหรับ Export รายคอร์ส (ใช้ $final_amount แทน)
                 $exportStatus = $isPaid ? 'ชำระเงินแล้ว' : ($isUnpaid ? 'รอชำระเงิน' : 'อื่นๆ');
                 $exportAmount = $isPaid ? $final_amount : ($isUnpaid ? $final_amount : 0);
@@ -120,7 +125,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
                 // กรองข้อมูล Export
                 if ($isPaid || (!$isPaid && !$isUserDeleted && !$isCourseDeleted && !$isEnrollDeleted)) {
                     $response['exportData'][] = [
-                        'courseName' => $row['course_name'],
+                        'courseName' => $exportCourseName,
                         'studentName' => $row['full_name'],
                         'amount' => $exportAmount,
                         'paymentStatus' => $exportStatus,
@@ -459,13 +464,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
         courseSheetData = courseSheetData.concat(coursesGroup[course]);
         let wsCourse = XLSX.utils.aoa_to_sheet(courseSheetData);
         
-        let safeSheetName = course.replace(/[\\/*?:\[\]]/g, '').substring(0, 31);
+        let isDeletedCourse = course.includes('(ลบคอร์ส)');
+        let cleanName = course.replace('(ลบคอร์ส)', '').replace(/[\\/*?:\[\]]/g, '').trim();
+        
+        let safeSheetName = "";
+        if (isDeletedCourse) {
+          safeSheetName = cleanName.substring(0, 19) + ' (ลบคอร์ส)';
+        } else {
+          safeSheetName = cleanName.substring(0, 31);
+        }
+        
         if (!safeSheetName) safeSheetName = "Course";
         
         let finalSheetName = safeSheetName;
         let counter = 1;
         while (wb.SheetNames.includes(finalSheetName)) {
-          finalSheetName = safeSheetName.substring(0, 27) + "_" + counter;
+          if (isDeletedCourse) {
+             finalSheetName = cleanName.substring(0, 16) + "_" + counter + " (ลบคอร์ส)";
+          } else {
+             finalSheetName = safeSheetName.substring(0, 27) + "_" + counter;
+          }
           counter++;
         }
         XLSX.utils.book_append_sheet(wb, wsCourse, finalSheetName);

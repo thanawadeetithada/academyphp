@@ -68,10 +68,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
   <style>
     body { background-color: #f8f9fa; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-    .app-layout { display: flex; min-height: 100vh; }
-    .sidebar { width: 260px; flex-shrink: 0; z-index: 1000; }
+    .app-layout { display: flex; min-height: 100vh; overflow-x: hidden; }
+    .sidebar { width: 260px; transition: all 0.3s; flex-shrink: 0; z-index: 1000; }
     .nav-item { display: block; padding: 12px 20px; margin-bottom: 5px; border-radius: 8px; text-decoration: none; }
-    .main-content { flex-grow: 1; padding: 20px; width: 100%; }
+    .nav-item:hover { background-color: rgba(255,255,255,0.1); }
+    .main-content { flex-grow: 1; padding: 20px; transition: all 0.3s; width: 100%; }
+    .mobile-overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); z-index: 999; }
+    @media (max-width: 991.98px) { .sidebar { position: fixed; left: -260px; height: 100vh; } .sidebar.show { left: 0; } .mobile-overlay.show { display: block; } }
     .full-page-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(255,255,255,0.8); z-index: 1060; display: flex; flex-direction: column; justify-content: center; align-items: center; visibility: hidden; opacity: 0; transition: opacity 0.3s; }
     .full-page-overlay.show { visibility: visible; opacity: 1; }
   </style>
@@ -79,8 +82,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
 <body>
 
 <div class="app-layout">
-  <aside class="sidebar text-white shadow-sm d-flex flex-column" style="background-color: #2b4d7e;">
-    <div class="sidebar-header border-bottom border-secondary pt-4 pb-3 text-center">
+  <div class="mobile-overlay" id="mobileOverlay" onclick="toggleSidebar()"></div>
+
+  <aside class="sidebar text-white shadow-sm d-flex flex-column" style="background-color: #2b4d7e;" id="studentSidebar">
+    <div class="sidebar-header border-bottom border-secondary pt-4 pb-3 text-center position-relative">
+      <button class="btn text-white position-absolute top-0 end-0 m-2 d-lg-none" style="background: transparent; border: none; font-size: 1.5rem;" onclick="toggleSidebar()">
+        <i class="bi bi-x-lg"></i>
+      </button>
       <img src="img/logo.png" onerror="this.src='https://via.placeholder.com/50'" style="width: 50px; height: 50px; object-fit: contain;">
       <h5 class="fw-bold mb-0 mt-2">Sci Math Academy</h5>
     </div>
@@ -89,9 +97,16 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
       <a href="student_courses.php" class="nav-item text-white text-opacity-75"><i class="bi bi-collection me-2"></i> คอร์สทั้งหมด</a>
       <a href="student_payment.php" class="nav-item active text-dark fw-bold" style="background: #f0f4f8; border-left: 4px solid #0d6efd;"><i class="bi bi-wallet2 text-primary me-2"></i> แจ้งชำระเงิน</a>
     </div>
+    <div class="p-3 border-top border-secondary">
+      <a href="index.php" class="nav-item text-white text-opacity-75 m-0 text-decoration-none" onclick="localStorage.clear();"><i class="bi bi-box-arrow-right me-2"></i> ออกจากระบบ</a>
+    </div>
   </aside>
 
   <main class="main-content pb-5">
+    <div class="d-lg-none mb-3">
+      <button class="btn btn-light shadow-sm" onclick="toggleSidebar()"><i class="bi bi-list fs-4"></i></button>
+    </div>
+
     <div class="row justify-content-center">
       <div class="col-lg-8 col-xl-7">
         <div class="card border-0 shadow-sm rounded-4 overflow-hidden">
@@ -186,6 +201,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 
 <script>
+  // ฟังก์ชันสำหรับสลับเปิด-ปิด Sidebar บนมือถือ
+  function toggleSidebar() {
+    document.getElementById('studentSidebar').classList.toggle('show');
+    document.getElementById('mobileOverlay').classList.toggle('show');
+  }
+
   const urlParams = new URLSearchParams(window.location.search);
   const basePrice = parseFloat(urlParams.get('price')) || 0;
   const otherPrice = parseFloat(urlParams.get('otherExpensePrice')) || 0;

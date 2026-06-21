@@ -477,7 +477,7 @@ $currentMonthTh = $thaiMonths[date("m")];
       </div>
       <div class="modal-footer border-0 d-flex justify-content-center pt-0 pb-4 gap-2">
         <button type="button" class="btn btn-light px-4 rounded-pill" data-bs-dismiss="modal">ยกเลิก</button>
-        <button type="button" class="btn btn-primary px-4 rounded-pill" onclick="executeSlipStatusUpdate()">ยืนยัน</button>
+        <button type="button" class="btn btn-primary px-4 rounded-pill" id="btnConfirmSlipStatus" onclick="executeSlipStatusUpdate()">ยืนยัน</button>
       </div>
     </div>
   </div>
@@ -746,11 +746,22 @@ $currentMonthTh = $thaiMonths[date("m")];
     window.scrollTo(0, 0);
   }
 
+  // --- ส่วนที่มีการเปลี่ยนแปลง เพื่อให้ปุ่มสลับสี/ข้อความ ตามสถานะ ---
   function promptUpdateSlipStatus(newStatus) {
     document.getElementById('tempSlipStatusToUpdate').value = newStatus;
-    let msg = newStatus === 'approval_payment' ? 'ยืนยันว่านักเรียนชำระเงินครบถ้วน ถูกต้องใช่หรือไม่?' : 'ต้องการปฏิเสธ และให้นักเรียนแจ้งชำระเงินใหม่ใช่หรือไม่? <br>(ข้อมูลสลิปเดิมจะถูกล้าง)';
     
-    document.getElementById('slipConfirmMessage').innerHTML = msg;
+    let confirmMsg = document.getElementById('slipConfirmMessage');
+    let confirmBtn = document.getElementById('btnConfirmSlipStatus');
+    
+    if (newStatus === 'approval_payment' || newStatus === 'paid') {
+        confirmMsg.innerHTML = 'ยืนยันว่านักเรียนชำระเงินครบถ้วน ถูกต้องใช่หรือไม่?';
+        confirmBtn.className = 'btn btn-success px-4 rounded-pill fw-bold';
+        confirmBtn.innerText = 'ยืนยันอนุมัติ';
+    } else {
+        confirmMsg.innerHTML = 'ต้องการปฏิเสธ และให้นักเรียนแจ้งชำระเงินใหม่ใช่หรือไม่? <br><small class="text-danger">(ข้อมูลสลิปเดิมจะถูกล้าง)</small>';
+        confirmBtn.className = 'btn btn-danger px-4 rounded-pill fw-bold';
+        confirmBtn.innerText = 'ยืนยันปฏิเสธ';
+    }
     
     const modalEl = document.getElementById('slipConfirmModal');
     const modal = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
