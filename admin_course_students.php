@@ -8,6 +8,33 @@ if (!isset($_SESSION['sessionRole']) || $_SESSION['sessionRole'] !== 'admin') {
   exit;
 }
 
+// ==========================================
+// API: ลบนักเรียนออกจากคอร์ส (ลบถาวร - Hard Delete)
+// ==========================================
+if (isset($_GET['action']) && $_GET['action'] === 'hardDeleteStudentCourse') {
+  header('Content-Type: application/json; charset=utf-8');
+  $input = json_decode(file_get_contents('php://input'), true);
+  $uId = $input['userId'] ?? '';
+  $cId = $input['courseId'] ?? '';
+
+  if (!$uId || !$cId) {
+      echo json_encode(['success' => false, 'message' => 'ข้อมูลไม่ครบถ้วน']);
+      exit;
+  }
+
+  try {
+      // ใช้คำสั่ง DELETE ลบแถวออกจากตาราง enrollments เลย
+      $stmt = $conn->prepare("DELETE FROM enrollments WHERE user_id = ? AND course_id = ?");
+      $stmt->bind_param("ss", $uId, $cId);
+      $stmt->execute();
+      
+      echo json_encode(['success' => true]);
+  } catch (Exception $e) {
+      echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+  }
+  exit;
+}
+
 // ตรวจสอบว่ามีการส่งรหัสคอร์สมาหรือไม่ หากไม่มีให้กลับไปหน้าจัดการคอร์ส
 if (empty($_GET['courseId'])) {
   header('Location: admin_courses.php');
@@ -191,11 +218,11 @@ $courseName = $_GET['courseName'] ?? 'ไม่ระบุชื่อคอร
         </div>
         <div class="modal-body p-4 text-center">
           <input type="hidden" id="deleteTargetUserId">
-          <p class="fs-6 mb-2 text-muted">คุณแน่ใจหรือไม่ว่าต้องการลบ?</p>
+          <p class="fs-6 mb-2 text-muted">คุณแน่ใจหรือไม่ว่าต้องการลบข้อมูลนี้?</p>
           <p class="fs-5 fw-bold text-dark mb-4" id="deleteTargetStudentName">?</p>
           <div class="d-flex justify-content-center gap-2 mt-2">
             <button type="button" class="btn btn-light px-4 py-2 fw-medium border shadow-sm" data-bs-dismiss="modal">ยกเลิก</button>
-            <button type="button" class="btn btn-danger px-4 py-2 fw-medium shadow-sm" onclick="executeDeleteStudent()">ยืนยันการลบ</button>
+            <button type="button" class="btn btn-danger px-4 py-2 fw-medium shadow-sm" onclick="executeDeleteStudent()">ยืนยันการลบถาวร</button>
           </div>
         </div>
       </div>
@@ -352,20 +379,30 @@ $courseName = $_GET['courseName'] ?? 'ไม่ระบุชื่อคอร
   }
 
   function deleteStudentEnrollment(userId) {
-    showLoading('กำลังลบข้อมูล...');
+    showLoading('กำลังลบข้อมูลถาวร...');
     
-    callAPI('softDeleteStudentCourse', { 
-        userId: userId, 
-        courseId: currentActiveCourseId 
-    }, 'POST')
-      .then(function(res) {
-        hideLoading();
-        if(res.success) {
-          viewCourseStudents(); 
-        } else {
-          alert('เกิดข้อผิดพลาดในการลบ: ' + res.message);
-        }
-      });
+    // ชี้ API ไปที่ไฟล์ admin_course_students.php นี้โดยตรง (สำหรับ Action: hardDeleteStudentCourse)
+    fetch('admin_course_students.php?action=hardDeleteStudentCourse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+            userId: userId, 
+            courseId: currentActiveCourseId 
+        })
+    })
+    .then(res => res.json())
+    .then(function(res) {
+      hideLoading();
+      if(res.success) {
+        viewCourseStudents(); // โหลดตารางใหม่หลังลบเสร็จ
+      } else {
+        alert('เกิดข้อผิดพลาดในการลบ: ' + res.message);
+      }
+    })
+    .catch(function(error) {
+      hideLoading();
+      alert('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์: ' + error.message);
+    });
   }
 
   function openAddStudentModal() {

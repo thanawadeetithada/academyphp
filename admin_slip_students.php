@@ -105,7 +105,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'getCourseStudentsForSlips') {
     $cId = $_GET['courseId'] ?? '';
     
     try {
-        $sql = "SELECT e.*, u.full_name, u.nickname, c.price 
+        // เพิ่มการดึง c.course_month เข้ามาใน SQL
+        $sql = "SELECT e.*, u.full_name, u.nickname, c.price, c.course_month 
                 FROM enrollments e 
                 JOIN users u ON e.user_id = u.user_id 
                 JOIN courses c ON e.course_id = c.course_id 
@@ -133,7 +134,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'getCourseStudentsForSlips') {
             $data[] = [
                 'enrollId' => $row['enroll_id'],
                 'studentName' => $row['full_name'] . (!empty($row['nickname']) ? ' (' . $row['nickname'] . ')' : ''),
-                'paidMonth' => $row['paid_month'],
+                'paidMonth' => $row['paid_month'], // เดือนบิล
+                'courseMonth' => $row['course_month'], // เดือนของคอร์สที่ดึงจากตาราง courses
                 'paymentStatus' => $row['payment_status'],
                 'paymentMethod' => $row['payment_method'],
                 'slipUrl' => $row['slip_url'],
@@ -631,7 +633,9 @@ $currentMonthTh = $thaiMonths[date("m")];
       let actionBtn = '';
       
       let hasPaymentMethod = (student.slipUrl && student.slipUrl.trim() !== '') || student.paymentMethod === 'เงินสด';
-      let monthText = student.paidMonth || 'ไม่ระบุ';
+      
+      // ดึงค่าเดือนของคอร์สมาแสดงผล
+      let monthText = student.courseMonth || 'ไม่ระบุ';
 
       if (student.paymentStatus === 'paid' || student.paymentStatus === 'approval_payment') {
         statusBadge = `<span class="badge bg-success-subtle text-success px-3 py-2 rounded-pill"><i class="bi bi-check-circle-fill me-1"></i>ชำระแล้ว</span>`;
@@ -744,7 +748,7 @@ $currentMonthTh = $thaiMonths[date("m")];
 
   function promptUpdateSlipStatus(newStatus) {
     document.getElementById('tempSlipStatusToUpdate').value = newStatus;
-    let msg = newStatus === 'paid' ? 'ยืนยันว่านักเรียนชำระเงินครบถ้วน ถูกต้องใช่หรือไม่?' : 'ต้องการปฏิเสธ และให้นักเรียนแจ้งชำระเงินใหม่ใช่หรือไม่? <br>(ข้อมูลสลิปเดิมจะถูกล้าง)';
+    let msg = newStatus === 'approval_payment' ? 'ยืนยันว่านักเรียนชำระเงินครบถ้วน ถูกต้องใช่หรือไม่?' : 'ต้องการปฏิเสธ และให้นักเรียนแจ้งชำระเงินใหม่ใช่หรือไม่? <br>(ข้อมูลสลิปเดิมจะถูกล้าง)';
     
     document.getElementById('slipConfirmMessage').innerHTML = msg;
     
