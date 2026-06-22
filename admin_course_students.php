@@ -23,11 +23,57 @@ if (isset($_GET['action']) && $_GET['action'] === 'hardDeleteStudentCourse') {
   }
 
   try {
-      // ใช้คำสั่ง DELETE ลบแถวออกจากตาราง enrollments เลย
       $stmt = $conn->prepare("DELETE FROM enrollments WHERE user_id = ? AND course_id = ?");
       $stmt->bind_param("ss", $uId, $cId);
       $stmt->execute();
       
+      echo json_encode(['success' => true]);
+  } catch (Exception $e) {
+      echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+  }
+  exit;
+}
+
+// ==========================================
+// API: เพิ่มนักเรียนเข้าคอร์สเรียน (แบบเลือกหลายคน)
+// ==========================================
+if (isset($_GET['action']) && $_GET['action'] === 'addMultipleStudentsToCourse') {
+  header('Content-Type: application/json; charset=utf-8');
+  $input = json_decode(file_get_contents('php://input'), true);
+  $cId = $input['courseId'] ?? '';
+  $rowIds = $input['rowIds'] ?? []; // อาร์เรย์ของ userId ที่เลือกมาจาก Modal
+
+  if (!$cId || empty($rowIds)) {
+      echo json_encode(['success' => false, 'message' => 'ข้อมูลไม่ครบถ้วน']);
+      exit;
+  }
+
+  try {
+      // 1. ดึงข้อมูล course_month และ year_be จากตาราง courses ตาม courseId ที่ส่งมา
+      // หมายเหตุ: หากคอลัมน์ ID ของตาราง courses ในฐานข้อมูลใช้ชื่ออื่น เช่น course_id ให้เปลี่ยน "WHERE id = ?" เป็น "WHERE course_id = ?"
+      $stmtCourse = $conn->prepare("SELECT course_month, year_be FROM courses WHERE id = ?");
+      $stmtCourse->bind_param("s", $cId);
+      $stmtCourse->execute();
+      $resCourse = $stmtCourse->get_result();
+      $courseData = $resCourse->fetch_assoc();
+
+      if (!$courseData) {
+          echo json_encode(['success' => false, 'message' => 'ไม่พบข้อมูลคอร์สเรียนนี้ในระบบ']);
+          exit;
+      }
+
+      // จัดรูปแบบข้อความ เช่น "กค 2569"
+      $paidMonthFormat = trim($courseData['course_month'] . ' ' . $courseData['year_be']);
+
+      // 2. วนลูปเพิ่มนักเรียนลงในตาราง enrollments พร้อมคอลัมน์ paid_month
+      // กำหนดสถานะเริ่มต้นเป็น 'pending_approval' (รออนุมัติ) หรือเปลี่ยนเป็น 'approved' ตามที่ระบบต้องการ
+      $stmtEnroll = $conn->prepare("INSERT INTO enrollments (user_id, course_id, paid_month, status) VALUES (?, ?, ?, 'pending_approval')");
+      
+      foreach ($rowIds as $uId) {
+          $stmtEnroll->bind_param("sss", $uId, $cId, $paidMonthFormat);
+          $stmtEnroll->execute();
+      }
+
       echo json_encode(['success' => true]);
   } catch (Exception $e) {
       echo json_encode(['success' => false, 'message' => $e->getMessage()]);

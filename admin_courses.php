@@ -150,7 +150,24 @@ if (isset($_GET['action'])) {
                 $userIds = $data['rowIds'];
                 $courseId = $data['courseId'];
 
-                $stmt = $conn->prepare("INSERT INTO enrollments (enroll_id, user_id, course_id, approval_status, payment_status) VALUES (?, ?, ?, 'approved', 'pending_payment')");
+                // 1. ดึงข้อมูล course_month และ year_be จากตาราง courses
+                $stmtCourse = $conn->prepare("SELECT course_month, year_be FROM courses WHERE course_id = ?");
+                $stmtCourse->execute([$courseId]);
+                $courseResult = $stmtCourse->get_result();
+                $courseData = $courseResult->fetch_assoc();
+                
+                // จัดรูปแบบ paid_month (เช่น "กค 2569")
+                $paidMonthFormat = null;
+                if ($courseData) {
+                    $month = trim($courseData['course_month'] ?? '');
+                    $year = trim($courseData['year_be'] ?? '');
+                    if ($month !== '' || $year !== '') {
+                        $paidMonthFormat = trim($month . ' ' . $year);
+                    }
+                }
+
+                // 2. Insert ข้อมูลลง enrollments พร้อม paid_month ที่ตั้งค่าไว้
+                $stmt = $conn->prepare("INSERT INTO enrollments (enroll_id, user_id, course_id, approval_status, payment_status, paid_month) VALUES (?, ?, ?, 'approved', 'pending_payment', ?)");
                 
                 foreach ($userIds as $userId) {
                     $checkStmt = $conn->prepare("SELECT COUNT(*) FROM enrollments WHERE user_id = ? AND course_id = ? AND deleted_at IS NULL");
@@ -160,7 +177,7 @@ if (isset($_GET['action'])) {
                     
                     if ($row[0] == 0) {
                         $enrollId = 'E' . uniqid();
-                        $stmt->execute([$enrollId, $userId, $courseId]);
+                        $stmt->execute([$enrollId, $userId, $courseId, $paidMonthFormat]);
                     }
                 }
                 echo json_encode(['success' => true]);

@@ -15,6 +15,14 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
     $data = json_decode(file_get_contents("php://input"), true);
     
     try {
+        // --- ตรวจสอบวันที่ ห้ามส่งค่าวันในอนาคตมาบันทึก ---
+        $currentDate = date('Y-m-d');
+        if (isset($data['paymentDate']) && $data['paymentDate'] > $currentDate) {
+            echo json_encode(['success' => false, 'message' => 'ไม่สามารถระบุวันที่โอนหรือชำระเงินล่วงหน้าในอนาคตได้']);
+            exit;
+        }
+        // -----------------------------------------
+
         $isNewRow = $data['isNewRow'] === true || $data['isNewRow'] === 'true';
         $slipUrl = "";
         
@@ -66,6 +74,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
   <title>Sci Math Academy - แนบหลักฐานชำระเงิน</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+  
   <style>
     body { background-color: #f8f9fa; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
     .app-layout { display: flex; min-height: 100vh; overflow-x: hidden; }
@@ -135,12 +146,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
                   <label class="form-check-label w-100" for="otherExpenseCheck" id="otherExpenseLabel" style="cursor: pointer;"></label>
                 </div>
               </div>
+              
               <div class="row mb-3">
                 <div class="col-md-6 mb-3 mb-md-0">
                   <label class="form-label text-muted small fw-bold">วันที่ทำรายการ <span class="text-danger">*</span></label>
                   <div class="position-relative">
-                    <input type="date" id="payDate" required class="position-absolute top-0 start-0 w-100 h-100" style="opacity: 0; cursor: pointer; z-index: 10;" onchange="updateDateDisplay()">
-                    <input type="text" id="payDateDisplay" class="form-control bg-white" readonly placeholder="เลือกวันที่">
+                    <input type="hidden" id="payDate" required>
+                    <input type="text" id="payDateDisplay" class="form-control bg-white" readonly placeholder="เลือกวันที่" style="cursor: pointer;">
                     <i class="bi bi-calendar-event position-absolute" style="right: 15px; top: 50%; transform: translateY(-50%); z-index: 5; color: #6c757d; pointer-events: none;"></i>
                   </div>
                 </div>
@@ -149,6 +161,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
                   <input type="time" class="form-control" id="payTime" required>
                 </div>
               </div>
+              
               <div class="mb-3"><label class="form-label text-muted small fw-bold">จำนวนเงินสุทธิ (บาท) <span class="text-danger">*</span></label><input type="number" class="form-control text-dark fw-bold fs-5 bg-light" id="payAmount" readonly></div>
               <div class="mb-3">
                 <label class="form-label text-muted small fw-bold">ช่องทางการชำระเงิน <span class="text-danger">*</span></label>
@@ -199,9 +212,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+<script src="https://npmcdn.com/flatpickr/dist/l10n/th.js"></script>
 
 <script>
-  // ฟังก์ชันสำหรับสลับเปิด-ปิด Sidebar บนมือถือ
   function toggleSidebar() {
     document.getElementById('studentSidebar').classList.toggle('show');
     document.getElementById('mobileOverlay').classList.toggle('show');
@@ -211,19 +225,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
   const basePrice = parseFloat(urlParams.get('price')) || 0;
   const otherPrice = parseFloat(urlParams.get('otherExpensePrice')) || 0;
 
-  function updateDateDisplay() {
-    const dateVal = document.getElementById('payDate').value;
-    if (!dateVal) {
-      document.getElementById('payDateDisplay').value = '';
-      return;
+  // ฟังก์ชันช่วยปรับปีใน Modal เป็น พ.ศ.
+  function applyBuddhistYear(instance) {
+    if (instance.currentYearElement) {
+        instance.currentYearElement.value = instance.currentYear + 543;
+        instance.currentYearElement.setAttribute('readonly', 'readonly'); // ป้องกันการพิมพ์แก้เพื่อไม่ให้เกิดบั๊กปี
     }
-    const d = new Date(dateVal);
-    const day = d.getDate();
-    const months = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
-    const month = months[d.getMonth()];
-    const yearBE = d.getFullYear() + 543;
-    
-    document.getElementById('payDateDisplay').value = `${day} ${month} ${yearBE}`;
   }
 
   document.addEventListener("DOMContentLoaded", function() {
@@ -245,10 +252,41 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
     
     const now = new Date();
     now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-    document.getElementById('payDate').value = now.toISOString().split('T')[0];
-    updateDateDisplay(); 
-    
     document.getElementById('payTime').value = now.toISOString().split('T')[1].slice(0,5);
+
+    // --- เริ่มต้นใช้งาน Flatpickr (สร้างปฏิทินแบบกำหนดเอง) ---
+    flatpickr("#payDateDisplay", {
+        locale: "th",                  // ใช้ภาษาไทย
+        maxDate: "today",              // จำกัดให้เลือกได้ถึงแค่วันปัจจุบัน (แก้ปัญหาวันที่ในอนาคต)
+        defaultDate: "today",          // ค่าเริ่มต้นคือวันนี้
+        disableMobile: true,           // สำคัญมาก! บังคับใช้หน้าตาปฏิทินของเราแทนปฏิทินพื้นฐานของมือถือ (กันการแสดงเป็น คศ)
+        onChange: function(selectedDates, dateStr, instance) {
+            if(selectedDates.length > 0) {
+                let d = selectedDates[0];
+                
+                // 1. บันทึกค่า Y-m-d ลงใน hidden input เพื่อส่งหลังบ้าน
+                const year = d.getFullYear();
+                const month = String(d.getMonth() + 1).padStart(2, '0');
+                const day = String(d.getDate()).padStart(2, '0');
+                document.getElementById('payDate').value = `${year}-${month}-${day}`;
+                
+                // 2. แสดงผลในช่อง Input เป็น "วัน เดือน (ภาษาไทย) ปี พ.ศ."
+                const monthsTH = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+                document.getElementById('payDateDisplay').value = `${d.getDate()} ${monthsTH[d.getMonth()]} ${year + 543}`;
+            }
+        },
+        onReady: function(selectedDates, dateStr, instance) {
+            // โหลดครั้งแรกให้เซ็ตค่าแสดงผลทันที
+            this.config.onChange[0](selectedDates, dateStr, instance);
+            applyBuddhistYear(instance); // ปรับหัวปฏิทินให้เป็น พ.ศ.
+        },
+        onYearChange: function(selectedDates, dateStr, instance) {
+            applyBuddhistYear(instance);
+        },
+        onMonthChange: function(selectedDates, dateStr, instance) {
+            applyBuddhistYear(instance);
+        }
+    });
   });
 
   function updateTotalAmount() {
@@ -268,14 +306,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
     document.getElementById('fullPageLoading').classList.add('show');
     
     const fileInput = document.getElementById('paySlipFile');
-    
     const isExpenseChecked = document.getElementById('otherExpenseCheck') ? document.getElementById('otherExpenseCheck').checked : false;
 
     const payload = {
       enrollId: urlParams.get('enrollId'), 
       courseId: urlParams.get('courseId'), 
       isNewRow: urlParams.get('isNewRow'),
-      paymentDate: document.getElementById('payDate').value, 
+      paymentDate: document.getElementById('payDate').value, // ดึงจาก hidden input ที่เราเตรียมไว้เป็นแบบ yyyy-mm-dd
       paymentTime: document.getElementById('payTime').value,
       amount: document.getElementById('payAmount').value, 
       includeOtherExpense: isExpenseChecked ? 1 : 0,

@@ -8,51 +8,38 @@ if (!isset($_SESSION['sessionRole']) || $_SESSION['sessionRole'] !== 'admin') {
     exit;
 }
 
+// Helper function สำหรับส่ง JSON Response เพื่อลดโค้ดซ้ำซ้อน
+function sendJSON($data) {
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($data);
+    exit;
+}
+
+$action = $_GET['action'] ?? '';
+
 // ==========================================
 // API 1: สร้างบิลรอบเดือนใหม่ให้นักเรียนทั้งคอร์ส
 // ==========================================
-if (isset($_GET['action']) && $_GET['action'] === 'startNewMonth') {
-    header('Content-Type: application/json; charset=utf-8');
+if ($action === 'startNewMonth') {
     $input = json_decode(file_get_contents('php://input'), true);
     $cId = $input['courseId'] ?? '';
-    $newMonth = $input['newMonth'] ?? '';
+    $newMonth = $input['newMonth'] ?? ''; // รูปแบบข้อมูลที่ส่งมาจะเป็น "มค 2569"
 
-    if (!$cId || !$newMonth) {
-        echo json_encode(['success' => false, 'message' => 'ข้อมูลไม่ครบถ้วน']);
-        exit;
-    }
+    if (!$cId || !$newMonth) sendJSON(['success' => false, 'message' => 'ข้อมูลไม่ครบถ้วน']);
 
     try {
         $conn->begin_transaction();
 
         // ดึง user_id ของนักเรียนทุกคนที่ผ่านการอนุมัติในคอร์สนี้
-        $stmt = $conn->prepare("
-            SELECT DISTINCT e.user_id 
-            FROM enrollments e 
-            JOIN users u ON e.user_id = u.user_id 
-            WHERE e.course_id = ? 
-            AND e.approval_status IN ('approved', 'อนุมัติแล้ว') 
-            AND e.deleted_at IS NULL 
-            AND u.deleted_at IS NULL
-        ");
+        $stmt = $conn->prepare("SELECT DISTINCT e.user_id FROM enrollments e JOIN users u ON e.user_id = u.user_id WHERE e.course_id = ? AND e.approval_status IN ('approved', 'อนุมัติแล้ว') AND e.deleted_at IS NULL AND u.deleted_at IS NULL");
         $stmt->bind_param("s", $cId);
         $stmt->execute();
         $users = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
-        if (count($users) === 0) {
-            throw new Exception("ไม่พบนักเรียนในคอร์สนี้ หรือนักเรียนถูกลบออกจากระบบหมดแล้ว");
-        }
+        if (count($users) === 0) throw new Exception("ไม่พบนักเรียนในคอร์สนี้ หรือนักเรียนถูกลบออกจากระบบหมดแล้ว");
 
         // เช็คว่าใครที่เคยถูกสร้างบิลรอบเดือนนี้ไปแล้วบ้าง
-        $stmtCheck = $conn->prepare("
-            SELECT e.user_id 
-            FROM enrollments e 
-            JOIN users u ON e.user_id = u.user_id 
-            WHERE e.course_id = ? 
-            AND e.paid_month = ? 
-            AND e.deleted_at IS NULL 
-            AND u.deleted_at IS NULL
-        ");
+        $stmtCheck = $conn->prepare("SELECT e.user_id FROM enrollments e JOIN users u ON e.user_id = u.user_id WHERE e.course_id = ? AND e.paid_month = ? AND e.deleted_at IS NULL AND u.deleted_at IS NULL");
         $stmtCheck->bind_param("ss", $cId, $newMonth);
         $stmtCheck->execute();
         $existingUsers = array_column($stmtCheck->get_result()->fetch_all(MYSQLI_ASSOC), 'user_id');
@@ -70,49 +57,25 @@ if (isset($_GET['action']) && $_GET['action'] === 'startNewMonth') {
             }
         }
 
-        // อัปเดตเดือนในตาราง courses
-        $stmtCourse = $conn->prepare("SELECT course_month FROM courses WHERE course_id = ? AND deleted_at IS NULL");
-        $stmtCourse->bind_param("s", $cId);
-        $stmtCourse->execute();
-        $rowCourse = $stmtCourse->get_result()->fetch_assoc();
-        
-        if ($rowCourse) {
-            $currentMonths = trim($rowCourse['course_month'] ?? '');
-            $monthsArray = array_map('trim', explode(',', $currentMonths));
-            if (!in_array($newMonth, $monthsArray)) {
-                $newMonthsStr = empty($currentMonths) ? $newMonth : $currentMonths . ', ' . $newMonth;
-                $stmtUpdCourse = $conn->prepare("UPDATE courses SET course_month = ? WHERE course_id = ?");
-                $stmtUpdCourse->bind_param("ss", $newMonthsStr, $cId);
-                $stmtUpdCourse->execute();
-            }
-        }
-
         $conn->commit();
-        echo json_encode(['success' => true, 'message' => "เพิ่มรอบเดือนใหม่ ($newMonth) ให้นักเรียนจำนวน $insertedCount คนเรียบร้อยแล้ว"]);
-
+        sendJSON(['success' => true, 'message' => "เพิ่มรอบเดือนใหม่ ($newMonth) ให้นักเรียนจำนวน $insertedCount คนเรียบร้อยแล้ว"]);
     } catch (Exception $e) {
         $conn->rollback();
-        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        sendJSON(['success' => false, 'message' => $e->getMessage()]);
     }
-    exit;
 }
 
 // ==========================================
 // API 2: ดึงรายชื่อนักเรียนในคอร์สมาแสดงในตาราง 
 // ==========================================
-if (isset($_GET['action']) && $_GET['action'] === 'getCourseStudentsForSlips') {
-    header('Content-Type: application/json; charset=utf-8');
+if ($action === 'getCourseStudentsForSlips') {
     $cId = $_GET['courseId'] ?? '';
-    
     try {
-        // เพิ่มการดึง c.course_month เข้ามาใน SQL
         $sql = "SELECT e.*, u.full_name, u.nickname, c.price, c.course_month 
                 FROM enrollments e 
                 JOIN users u ON e.user_id = u.user_id 
                 JOIN courses c ON e.course_id = c.course_id 
-                WHERE e.course_id = ? 
-                AND e.approval_status IN ('approved', 'อนุมัติแล้ว')
-                AND e.deleted_at IS NULL AND u.deleted_at IS NULL
+                WHERE e.course_id = ? AND e.approval_status IN ('approved', 'อนุมัติแล้ว') AND e.deleted_at IS NULL AND u.deleted_at IS NULL
                 ORDER BY e.timestamp DESC";
                 
         $stmt = $conn->prepare($sql);
@@ -122,20 +85,18 @@ if (isset($_GET['action']) && $_GET['action'] === 'getCourseStudentsForSlips') {
         
         $data = [];
         while ($row = $result->fetch_assoc()) {
-            $payDate = '-';
-            $payTime = '-';
+            $payDate = $payTime = '-';
             if (!empty($row['approved_date'])) {
                 $dt = new DateTime($row['approved_date']);
-                $year = (int)$dt->format('Y') + 543; // แปลงเป็น พ.ศ.
-                $payDate = $dt->format('d/m/') . $year;
+                $payDate = $dt->format('d/m/') . ((int)$dt->format('Y') + 543);
                 $payTime = $dt->format('H:i') . ' น.';
             }
             
             $data[] = [
                 'enrollId' => $row['enroll_id'],
                 'studentName' => $row['full_name'] . (!empty($row['nickname']) ? ' (' . $row['nickname'] . ')' : ''),
-                'paidMonth' => $row['paid_month'], // เดือนบิล
-                'courseMonth' => $row['course_month'], // เดือนของคอร์สที่ดึงจากตาราง courses
+                'paidMonth' => $row['paid_month'], 
+                'courseMonth' => $row['course_month'], 
                 'paymentStatus' => $row['payment_status'],
                 'paymentMethod' => $row['payment_method'],
                 'slipUrl' => $row['slip_url'],
@@ -145,53 +106,34 @@ if (isset($_GET['action']) && $_GET['action'] === 'getCourseStudentsForSlips') {
                 'price' => (float)$row['price']
             ];
         }
-        echo json_encode($data);
+        sendJSON($data);
     } catch (Exception $e) {
-        echo json_encode(['error' => $e->getMessage()]);
+        sendJSON(['error' => $e->getMessage()]);
     }
-    exit;
 }
 
 // ==========================================
 // API 3: อัปเดตสถานะสลิป (อนุมัติ / ปฏิเสธ) 
 // ==========================================
-if (isset($_GET['action']) && $_GET['action'] === 'updateSlipPaymentStatus') {
-    header('Content-Type: application/json; charset=utf-8');
+if ($action === 'updateSlipPaymentStatus') {
     $input = json_decode(file_get_contents('php://input'), true);
     $enrollId = $input['enrollId'] ?? '';
     $newStatus = $input['newStatus'] ?? '';
 
-    if (!$enrollId || !$newStatus) {
-        echo json_encode(['success' => false, 'message' => 'ข้อมูลไม่ครบถ้วน']);
-        exit;
-    }
+    if (!$enrollId || !$newStatus) sendJSON(['success' => false, 'message' => 'ข้อมูลไม่ครบถ้วน']);
 
     try {
         if ($newStatus === 'pending_payment') {
-            // กรณีปฏิเสธสลิป ให้ล้างค่าทุกอย่างตามที่ต้องการ
-            $stmt = $conn->prepare("
-                UPDATE enrollments 
-                SET payment_status = ?, 
-                    slip_url = NULL, 
-                    approved_date = NULL,
-                    net_price = 0,
-                    paid_month = NULL,
-                    payment_method = NULL,
-                    include_other_expense = 0
-                WHERE enroll_id = ?
-            ");
+            $stmt = $conn->prepare("UPDATE enrollments SET payment_status = ?, slip_url = NULL, approved_date = NULL, net_price = 0, paid_month = NULL, payment_method = NULL, include_other_expense = 0 WHERE enroll_id = ?");
         } else {
-            // กรณีอนุมัติ
             $stmt = $conn->prepare("UPDATE enrollments SET payment_status = ? WHERE enroll_id = ?");
         }
         $stmt->bind_param("ss", $newStatus, $enrollId);
         $stmt->execute();
-        
-        echo json_encode(['success' => true]);
+        sendJSON(['success' => true]);
     } catch (Exception $e) {
-        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        sendJSON(['success' => false, 'message' => $e->getMessage()]);
     }
-    exit;
 }
 
 // ==========================================
@@ -203,8 +145,6 @@ if (empty($_GET['courseId'])) {
 }
 
 $courseId = $_GET['courseId'];
-
-// ดึงข้อมูลคอร์สทั้งหมดเพื่อเช็ค course_type และ course_month
 $stmt = $conn->prepare("SELECT name, duration, course_type, course_month FROM courses WHERE course_id = ? AND deleted_at IS NULL");
 $stmt->bind_param("s", $courseId);
 $stmt->execute();
@@ -219,17 +159,18 @@ $courseName = $courseResult['name'];
 $courseType = $courseResult['course_type'];
 $duration = $courseResult['duration'] ?? '';
 
-// แยกเดือนที่มีทั้งหมดใน course_month ออกมาเป็น Array
-$currentMonthsStr = $courseResult['course_month'] ?? '';
-$monthsArray = array_filter(array_map('trim', explode(',', $currentMonthsStr)));
+// --- จุดที่แก้ไข: เปลี่ยนมาดึงข้อมูลรอบเดือนที่มีอยู่จริงจากตาราง enrollments คอลัมน์ paid_month ---
+$stmtMonths = $conn->prepare("SELECT DISTINCT paid_month FROM enrollments WHERE course_id = ? AND paid_month IS NOT NULL AND paid_month != '' AND deleted_at IS NULL ORDER BY paid_month DESC");
+$stmtMonths->bind_param("s", $courseId);
+$stmtMonths->execute();
+$monthsResult = $stmtMonths->get_result()->fetch_all(MYSQLI_ASSOC);
+$monthsArray = array_column($monthsResult, 'paid_month');
+// -----------------------------------------------------------------------------------------
 
-// คำนวณหาเดือนปัจจุบันแบบตัวย่อ เพื่อนำไปทำ Default ค่า
-$thaiMonths = [
-    "01" => "มค", "02" => "กพ", "03" => "มีค", "04" => "เมย",
-    "05" => "พค", "06" => "มิย", "07" => "กค", "08" => "สค",
-    "09" => "กย", "10" => "ตค", "11" => "พย", "12" => "ธค"
-];
-$currentMonthTh = $thaiMonths[date("m")];
+// จัดการโครงสร้างค่าเดือนและปีปัจจุบันให้อยู่ในรูปแบบ พ.ศ. (เช่น "มิย 2569")
+$thaiMonths = ["01" => "มค", "02" => "กพ", "03" => "มีค", "04" => "เมย", "05" => "พค", "06" => "มิย", "07" => "กค", "08" => "สค", "09" => "กย", "10" => "ตค", "11" => "พย", "12" => "ธค"];
+$currentYearTh = (int)date("Y") + 543;
+$currentMonthTh = $thaiMonths[date("m")] . " " . $currentYearTh;
 ?>
 <!DOCTYPE html>
 <html lang="th">
@@ -249,22 +190,9 @@ $currentMonthTh = $thaiMonths[date("m")];
     .nav-item:hover { background-color: rgba(255,255,255,0.1); }
     .main-content { flex-grow: 1; padding: 20px; transition: all 0.3s; width: 100%; }
     .mobile-overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); z-index: 999; }
-    
-    @media (max-width: 991.98px) {
-      .sidebar { position: fixed; left: -260px; height: 100vh; }
-      .sidebar.show { left: 0; }
-      .mobile-overlay.show { display: block; }
-    }
-    @media (min-width: 992px) {
-      .btn-toggle-menu { display: none !important; }
-    }
-    
-    .full-page-overlay {
-      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-      background: rgba(255,255,255,0.8); z-index: 1060;
-      display: flex; flex-direction: column; justify-content: center; align-items: center;
-      visibility: hidden; opacity: 0; transition: opacity 0.3s;
-    }
+    @media (max-width: 991.98px) { .sidebar { position: fixed; left: -260px; height: 100vh; } .sidebar.show { left: 0; } .mobile-overlay.show { display: block; } }
+    @media (min-width: 992px) { .btn-toggle-menu { display: none !important; } }
+    .full-page-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(255,255,255,0.8); z-index: 1060; display: flex; flex-direction: column; justify-content: center; align-items: center; visibility: hidden; opacity: 0; transition: opacity 0.3s; }
     .full-page-overlay.show { visibility: visible; opacity: 1; }
   </style>
 </head>
@@ -275,9 +203,7 @@ $currentMonthTh = $thaiMonths[date("m")];
 
   <aside class="sidebar text-white shadow-sm d-flex flex-column" style="background-color: #2b4d7e;" id="adminSidebar">
     <div class="sidebar-header border-bottom border-secondary pt-4 pb-3 position-relative">
-      <button class="btn text-white position-absolute top-0 end-0 m-2 d-lg-none" style="background: transparent; border: none; font-size: 1.5rem;" onclick="toggleSidebar()">
-        <i class="bi bi-x-lg"></i>
-      </button>
+      <button class="btn text-white position-absolute top-0 end-0 m-2 d-lg-none" style="background: transparent; border: none; font-size: 1.5rem;" onclick="toggleSidebar()"><i class="bi bi-x-lg"></i></button>
       <div class="d-flex align-items-center justify-content-center mb-2">
         <img src="img/logo.png" onerror="this.src='https://via.placeholder.com/50'" style="width: 50px; height: 50px; object-fit: contain;">  
       </div>
@@ -309,7 +235,7 @@ $currentMonthTh = $thaiMonths[date("m")];
       <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4 gap-3">
         <div class="d-flex align-items-center">
           <button class="btn me-2" onclick="window.location.href='admin_slips.php'"><i class="bi bi-arrow-left fs-5"></i></button>
-          <h4 class="fw-bold mb-0 text-dark">นักเรียนคอร์ส: <span class="text-primary"><?php echo htmlspecialchars($courseName); ?></span></h4>
+          <h4 class="fw-bold mb-0 text-dark">นักเรียนคอร์ส: <span class="text-primary"><?= htmlspecialchars($courseName); ?></span></h4>
         </div>
 
         <div class="d-flex align-items-center gap-2">
@@ -321,12 +247,7 @@ $currentMonthTh = $thaiMonths[date("m")];
             } else {
                 $hasCurrentMonth = in_array($currentMonthTh, $monthsArray);
                 foreach ($monthsArray as $index => $m) {
-                    $selected = '';
-                    if ($hasCurrentMonth && $m === $currentMonthTh) {
-                        $selected = 'selected';
-                    } elseif (!$hasCurrentMonth && $index === 0) {
-                        $selected = 'selected';
-                    }
+                    $selected = ($hasCurrentMonth && $m === $currentMonthTh) || (!$hasCurrentMonth && $index === 0) ? 'selected' : '';
                     echo '<option value="' . htmlspecialchars($m) . '" ' . $selected . '>รอบเดือน ' . htmlspecialchars($m) . '</option>';
                 }
             }
@@ -371,7 +292,7 @@ $currentMonthTh = $thaiMonths[date("m")];
             <div class="position-absolute top-0 start-0 w-100 bg-primary" style="height: 5px;"></div>
             <div class="card-body p-4 p-md-5 text-center">
               <h5 class="fw-bold text-dark mb-1" id="slipDetailStudentName"></h5>
-              <p class="text-muted small mb-4" id="slipDetailCourseName">คอร์ส: <?php echo htmlspecialchars($courseName); ?></p>
+              <p class="text-muted small mb-4" id="slipDetailCourseName">คอร์ส: <?= htmlspecialchars($courseName); ?></p>
 
               <div class="p-3 bg-light rounded-3 mb-4 text-start">
                 <div class="d-flex justify-content-between mb-2 border-bottom pb-2">
@@ -418,31 +339,49 @@ $currentMonthTh = $thaiMonths[date("m")];
   </main>
 </div>
 
-<div class="modal fade" id="newMonthModal" tabindex="-1">
+<div class="modal fade" id="newMonthModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content border-0 shadow rounded-4">
       <div class="modal-header border-0 pb-0">
         <h5 class="modal-title fw-bold text-primary"><i class="bi bi-calendar2-plus me-2"></i>เริ่มต้นรอบเดือนใหม่</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body p-4 text-center">
         <p class="text-muted small mb-4">ระบบจะสร้างบิลเรียกเก็บเงินใหม่ ให้นักเรียนทุกคนในคอร์สนี้โดยอัตโนมัติ</p>
         <div class="text-start">
           <label class="form-label fw-bold">เลือกเดือนที่ต้องการเริ่มเรียน</label>
           <select id="selectNewMonth" class="form-select mb-2 fw-bold text-dark" style="border-radius: 8px;">
-            <option value="มค">มกราคม (มค)</option>
-            <option value="กพ">กุมภาพันธ์ (กพ)</option>
-            <option value="มีค">มีนาคม (มีค)</option>
-            <option value="เมย">เมษายน (เมย)</option>
-            <option value="พค">พฤษภาคม (พค)</option>
-            <option value="มิย">มิถุนายน (มิย)</option>
-            <option value="กค">กรกฎาคม (กค)</option>
-            <option value="สค">สิงหาคม (สค)</option>
-            <option value="กย">กันยายน (กย)</option>
-            <option value="ตค">ตุลาคม (ตค)</option>
-            <option value="พย">พฤศจิกายน (พย)</option>
-            <option value="ธค">ธันวาคม (ธค)</option>
-          </select>
+  <?php 
+    $thMonthsFull = [1=>"มกราคม", 2=>"กุมภาพันธ์", 3=>"มีนาคม", 4=>"เมษายน", 5=>"พฤษภาคม", 6=>"มิถุนายน", 7=>"กรกฎาคม", 8=>"สิงหาคม", 9=>"กันยายน", 10=>"ตุลาคม", 11=>"พฤศจิกายน", 12=>"ธันวาคม"];
+    $thMonthsShort = [1=>"มค", 2=>"กพ", 3=>"มีค", 4=>"เมย", 5=>"พค", 6=>"มิย", 7=>"กค", 8=>"สค", 9=>"กย", 10=>"ตค", 11=>"พย", 12=>"ธค"];
+    
+    $currentM = (int)date('n'); // เดือนปัจจุบัน (1-12)
+    $currentY = (int)date('Y'); // ปี ค.ศ. ปัจจุบัน
+
+    // วนลูปสร้างตัวเลือก 12 เดือน: ย้อนหลัง 1 เดือน และล่วงหน้า 10 เดือน
+    for($i = -1; $i <= 10; $i++) {
+        $calcMonth = $currentM + $i;
+        $calcYear = $currentY;
+        
+        // ปรับการคำนวณกรณีข้ามปี
+        if ($calcMonth < 1) {
+            $calcMonth += 12;
+            $calcYear--; // ปีย้อนหลัง
+        } elseif ($calcMonth > 12) {
+            $calcMonth -= 12;
+            $calcYear++; // ปีล่วงหน้า
+        }
+        
+        $yearTh = $calcYear + 543;
+        $val = $thMonthsShort[$calcMonth] . " " . $yearTh;
+        
+        // ให้ค่า Default เลือกที่เดือนปัจจุบันพอดี
+        $selected = ($i === 0) ? 'selected' : ''; 
+        
+        echo "<option value='{$val}' {$selected}>รอบเดือน {$thMonthsFull[$calcMonth]} ({$val})</option>";
+    }
+  ?>
+</select>
         </div>
       </div>
       <div class="modal-footer border-0 d-flex justify-content-center pt-0 pb-4 gap-2">
@@ -453,7 +392,7 @@ $currentMonthTh = $thaiMonths[date("m")];
   </div>
 </div>
 
-<div class="modal fade" id="slipAlertModal" tabindex="-1">
+<div class="modal fade" id="slipAlertModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content border-0 shadow rounded-4">
       <div class="modal-body text-center p-5">
@@ -466,7 +405,7 @@ $currentMonthTh = $thaiMonths[date("m")];
   </div>
 </div>
 
-<div class="modal fade" id="slipConfirmModal" tabindex="-1">
+<div class="modal fade" id="slipConfirmModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content border-0 shadow rounded-4">
       <div class="modal-body text-center p-4 pb-2">
@@ -492,10 +431,23 @@ $currentMonthTh = $thaiMonths[date("m")];
 
 <script>
   const API_URL = 'admin_slip_students.php';
-
-  let currentSlipCourseId = '<?php echo htmlspecialchars($courseId, ENT_QUOTES, 'UTF-8'); ?>';
-  let currentSlipCourseName = '<?php echo htmlspecialchars($courseName, ENT_QUOTES, 'UTF-8'); ?>';
+  let currentSlipCourseId = '<?= htmlspecialchars($courseId, ENT_QUOTES, 'UTF-8') ?>';
+  let currentSlipCourseName = '<?= htmlspecialchars($courseName, ENT_QUOTES, 'UTF-8') ?>';
   let currentSlipStudentsData = [];
+
+  // ประกาศตัวแปรเก็บ Instance ของ Bootstrap Modal ป้องกันปัญหา Backdrop ทับซ้อน และแก้อาการปุ่มกดไม่ติด
+  let bootstrapNewMonthModal = null;
+  let bootstrapSlipAlertModal = null;
+  let bootstrapSlipConfirmModal = null;
+
+  document.addEventListener("DOMContentLoaded", function() {
+    // ผูก Instance Modal ครั้งเดียวหลังจากที่ DOM โหลดเสร็จสิ้น เพื่อเสถียรภาพสูงสุดของ UI 
+    bootstrapNewMonthModal = new bootstrap.Modal(document.getElementById('newMonthModal'));
+    bootstrapSlipAlertModal = new bootstrap.Modal(document.getElementById('slipAlertModal'));
+    bootstrapSlipConfirmModal = new bootstrap.Modal(document.getElementById('slipConfirmModal'));
+    
+    loadStudentData();
+  });
 
   async function callAPI(action, data = null, method = 'POST') {
     try {
@@ -506,8 +458,7 @@ $currentMonthTh = $thaiMonths[date("m")];
         options.headers = { 'Content-Type': 'application/json' };
         options.body = JSON.stringify(data);
       } else if (method === 'GET' && data) {
-        const params = new URLSearchParams(data).toString();
-        url += `&${params}`;
+        url += `&${new URLSearchParams(data).toString()}`;
       }
 
       const response = await fetch(url, options);
@@ -524,9 +475,8 @@ $currentMonthTh = $thaiMonths[date("m")];
   }
 
   function showSlipLoading(text) {
-    const overlay = document.getElementById('slipFullPageLoading');
     document.getElementById('slipLoadingText').innerText = text;
-    overlay.style.display = 'flex';
+    document.getElementById('slipFullPageLoading').style.display = 'flex';
   }
 
   function hideSlipLoading() {
@@ -537,30 +487,21 @@ $currentMonthTh = $thaiMonths[date("m")];
     const icon = document.getElementById('slipAlertIcon');
     const title = document.getElementById('slipAlertTitle');
 
-    if (type === 'success') {
-      icon.className = 'bi bi-check-circle-fill text-success mb-4 d-block';
-      title.innerText = 'ดำเนินการสำเร็จ';
-    } else {
-      icon.className = 'bi bi-x-circle-fill text-danger mb-4 d-block';
-      title.innerText = 'เกิดข้อผิดพลาด';
-    }
+    icon.className = type === 'success' ? 'bi bi-check-circle-fill text-success mb-4 d-block' : 'bi bi-x-circle-fill text-danger mb-4 d-block';
+    title.innerText = type === 'success' ? 'ดำเนินการสำเร็จ' : 'เกิดข้อผิดพลาด';
 
     document.getElementById('slipAlertMessage').innerText = message;
-    const modalEl = document.getElementById('slipAlertModal');
-    const modal = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
-    modal.show();
+    if (bootstrapSlipAlertModal) bootstrapSlipAlertModal.show();
   }
 
   function openNewMonthModal() {
-    const modal = new bootstrap.Modal(document.getElementById('newMonthModal'));
-    modal.show();
+    // ไม่มีการซ่อนเดือนแล้ว เปิด Modal ขึ้นมาตรงๆ ได้เลย
+    if (bootstrapNewMonthModal) bootstrapNewMonthModal.show();
   }
 
   function confirmStartNewMonth() {
     const selectedMonth = document.getElementById('selectNewMonth').value;
-    const modalEl = document.getElementById('newMonthModal');
-    const modal = bootstrap.Modal.getInstance(modalEl);
-    if(modal) modal.hide();
+    if (bootstrapNewMonthModal) bootstrapNewMonthModal.hide();
 
     showSlipLoading('กำลังสร้างรายการรอบเดือนใหม่...');
 
@@ -588,10 +529,6 @@ $currentMonthTh = $thaiMonths[date("m")];
     });
   }
 
-  document.addEventListener("DOMContentLoaded", function() {
-    loadStudentData();
-  });
-
   function loadStudentData() {
     const monthDropdown = document.getElementById('monthDropdown');
     let selectedMonth = monthDropdown ? monthDropdown.value : ''; 
@@ -606,11 +543,7 @@ $currentMonthTh = $thaiMonths[date("m")];
 
     callAPI('getCourseStudentsForSlips', {courseId: currentSlipCourseId, month: selectedMonth}, 'GET').then(function(students) {
       if(students && !students.message && !students.error) {
-        let filteredStudents = students;
-        if (monthDropdown) {
-             filteredStudents = students.filter(s => s.paidMonth === selectedMonth);
-        }
-        
+        let filteredStudents = monthDropdown ? students.filter(s => s.paidMonth === selectedMonth) : students;
         currentSlipStudentsData = filteredStudents;
         displaySlipStudentsList(filteredStudents); 
       } else {
@@ -629,13 +562,10 @@ $currentMonthTh = $thaiMonths[date("m")];
     }
 
     students.forEach(student => {
-      let statusBadge = '';
-      let actionBtn = '';
-      
+      let statusBadge = '', actionBtn = '';
       let hasPaymentMethod = (student.slipUrl && student.slipUrl.trim() !== '') || student.paymentMethod === 'เงินสด';
       
-      // ดึงค่าเดือนของคอร์สมาแสดงผล
-      let monthText = student.courseMonth || 'ไม่ระบุ';
+      let monthText = student.paidMonth || 'ไม่ระบุ';
 
       if (student.paymentStatus === 'paid' || student.paymentStatus === 'approval_payment') {
         statusBadge = `<span class="badge bg-success-subtle text-success px-3 py-2 rounded-pill"><i class="bi bi-check-circle-fill me-1"></i>ชำระแล้ว</span>`;
@@ -658,14 +588,11 @@ $currentMonthTh = $thaiMonths[date("m")];
 
       tbody.innerHTML += `
         <tr>
-          <td class="px-4 py-3 fw-medium text-dark text-nowrap">
-            <i class="bi bi-person-circle text-secondary me-2"></i> ${student.studentName}
-          </td>
+          <td class="px-4 py-3 fw-medium text-dark text-nowrap"><i class="bi bi-person-circle text-secondary me-2"></i> ${student.studentName}</td>
           <td class="py-3 text-center text-nowrap">${monthText}</td>
           <td class="py-3 text-center text-nowrap">${statusBadge}</td>
           <td class="px-4 py-3 text-center text-nowrap">${actionBtn}</td>
-        </tr>
-      `;
+        </tr>`;
     });
   }
 
@@ -679,64 +606,40 @@ $currentMonthTh = $thaiMonths[date("m")];
     document.getElementById('slipDetailDate').innerText = student.payDate || '-';
     document.getElementById('slipDetailTime').innerText = student.payTime || '-';
     
-    // ตั้งระบบ Fallback ดึงราคาให้ฉลาดขึ้น 
-    let finalAmount = 0;
-    if (student.netPrice && student.netPrice > 0) {
-        finalAmount = student.netPrice;
-    } else if (student.net_price && student.net_price > 0) {
-        finalAmount = student.net_price;
-    } else if (student.amount && student.amount > 0) {
-        finalAmount = student.amount;
-    } else if (student.price && student.price > 0) {
-        finalAmount = student.price;
-    }
-
-    const amountElem = document.getElementById('slipDetailAmount');
-    if(amountElem) amountElem.innerText = Number(finalAmount).toLocaleString() + ' ฿';
+    let finalAmount = student.netPrice || student.net_price || student.amount || student.price || 0;
+    document.getElementById('slipDetailAmount').innerText = Number(finalAmount).toLocaleString() + ' ฿';
 
     const buttonsContainer = document.getElementById('slipActionButtonsContainer');
-    if (student.paymentStatus === 'paid' || student.paymentStatus === 'approval_payment') {
-      buttonsContainer.style.setProperty('display', 'none', 'important'); 
-    } else {
-      buttonsContainer.style.setProperty('display', 'flex', 'important'); 
-    }
+    buttonsContainer.style.setProperty('display', ['paid', 'approval_payment'].includes(student.paymentStatus) ? 'none' : 'flex', 'important'); 
 
     const imgContainer = document.getElementById('slipImageContainer');
-    
     if (student.paymentMethod === 'เงินสด' && !student.slipUrl) {
       imgContainer.innerHTML = `
         <div class="text-center py-5">
           <i class="bi bi-cash-coin text-success mb-3 d-block" style="font-size: 4rem;"></i>
           <h5 class="fw-bold text-success mb-1">ชำระด้วยเงินสด</h5>
           <p class="text-muted small">รายการนี้ไม่มีการแนบสลิปผ่านออนไลน์</p>
-        </div>
-      `;
-    } 
-    else if (student.slipUrl) {
+        </div>`;
+    } else if (student.slipUrl) {
       let url = student.slipUrl;
-      let imgHtml = '';
-      
       if(url.includes("drive.google.com/file/d/")) {
         let fileId = url.match(/[-\w]{25,}/);
         if(fileId) {
-          let previewUrl = "https://drive.google.com/file/d/" + fileId[0] + "/preview";
-          imgHtml = `
+          imgContainer.innerHTML = `
             <div class="w-100 rounded-3 overflow-hidden" style="border: 1px solid #dee2e6;">
-              <iframe src="${previewUrl}" style="width: 100%; height: 400px; border: none;"></iframe>
+              <iframe src="https://drive.google.com/file/d/${fileId[0]}/preview" style="width: 100%; height: 400px; border: none;"></iframe>
             </div>
             <div class="mt-3">
               <a href="${url}" target="_blank" class="btn btn-outline-primary btn-sm rounded-pill px-3">
                 <i class="bi bi-box-arrow-up-right me-1"></i> เปิดดูรูปภาพแบบเต็มจอ
               </a>
-            </div>
-          `;
+            </div>`;
         } else {
-          imgHtml = `<a href="${url}" target="_blank" class="btn btn-outline-primary"><i class="bi bi-box-arrow-up-right me-1"></i> คลิกเพื่อเปิดดูรูปภาพ</a>`;
+          imgContainer.innerHTML = `<a href="${url}" target="_blank" class="btn btn-outline-primary"><i class="bi bi-box-arrow-up-right me-1"></i> คลิกเพื่อเปิดดูรูปภาพ</a>`;
         }
       } else {
-        imgHtml = `<a href="${url}" target="_blank"><img src="${url}" alt="Slip" style="max-width: 100%; max-height: 400px; object-fit: contain;"></a>`;
+        imgContainer.innerHTML = `<a href="${url}" target="_blank"><img src="${url}" alt="Slip" style="max-width: 100%; max-height: 400px; object-fit: contain;"></a>`;
       }
-      imgContainer.innerHTML = imgHtml;
     } else {
       imgContainer.innerHTML = `<span class="text-muted">ไม่พบข้อมูลการชำระเงิน</span>`;
     }
@@ -746,32 +649,22 @@ $currentMonthTh = $thaiMonths[date("m")];
     window.scrollTo(0, 0);
   }
 
-  // --- ส่วนที่มีการเปลี่ยนแปลง เพื่อให้ปุ่มสลับสี/ข้อความ ตามสถานะ ---
   function promptUpdateSlipStatus(newStatus) {
     document.getElementById('tempSlipStatusToUpdate').value = newStatus;
     
     let confirmMsg = document.getElementById('slipConfirmMessage');
     let confirmBtn = document.getElementById('btnConfirmSlipStatus');
+    let isApprove = ['approval_payment', 'paid'].includes(newStatus);
     
-    if (newStatus === 'approval_payment' || newStatus === 'paid') {
-        confirmMsg.innerHTML = 'ยืนยันว่านักเรียนชำระเงินครบถ้วน ถูกต้องใช่หรือไม่?';
-        confirmBtn.className = 'btn btn-success px-4 rounded-pill fw-bold';
-        confirmBtn.innerText = 'ยืนยันอนุมัติ';
-    } else {
-        confirmMsg.innerHTML = 'ต้องการปฏิเสธ และให้นักเรียนแจ้งชำระเงินใหม่ใช่หรือไม่? <br><small class="text-danger">(ข้อมูลสลิปเดิมจะถูกล้าง)</small>';
-        confirmBtn.className = 'btn btn-danger px-4 rounded-pill fw-bold';
-        confirmBtn.innerText = 'ยืนยันปฏิเสธ';
-    }
+    confirmMsg.innerHTML = isApprove ? 'ยืนยันว่านักเรียนชำระเงินครบถ้วน ถูกต้องใช่หรือไม่?' : 'ต้องการปฏิเสธ และให้นักเรียนแจ้งชำระเงินใหม่ใช่หรือไม่? <br><small class="text-danger">(ข้อมูลสลิปเดิมจะถูกล้าง)</small>';
+    confirmBtn.className = isApprove ? 'btn btn-success px-4 rounded-pill fw-bold' : 'btn btn-danger px-4 rounded-pill fw-bold';
+    confirmBtn.innerText = isApprove ? 'ยืนยันอนุมัติ' : 'ยืนยันปฏิเสธ';
     
-    const modalEl = document.getElementById('slipConfirmModal');
-    const modal = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
-    modal.show();
+    if (bootstrapSlipConfirmModal) bootstrapSlipConfirmModal.show();
   }
 
   function executeSlipStatusUpdate() {
-    const modalEl = document.getElementById('slipConfirmModal');
-    const modal = bootstrap.Modal.getInstance(modalEl);
-    if(modal) modal.hide();
+    if (bootstrapSlipConfirmModal) bootstrapSlipConfirmModal.hide();
 
     const enrollId = document.getElementById('currentSlipEnrollId').value;
     const newStatus = document.getElementById('tempSlipStatusToUpdate').value;
