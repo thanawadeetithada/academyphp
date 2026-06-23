@@ -170,7 +170,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
                   <div class="form-check"><input class="form-check-input" type="radio" name="paymentMethod" id="payMethodTransfer" value="โอนเงิน" checked onchange="updateSlipLabel()"><label class="form-check-label fw-bold" for="payMethodTransfer">โอนเข้าบัญชี</label></div>
                   <div class="form-check"><input class="form-check-input" type="radio" name="paymentMethod" id="payMethodCash" value="เงินสด" onchange="updateSlipLabel()"><label class="form-check-label fw-bold" for="payMethodCash">ชำระเงินสด</label></div>
                 </div>
-              </div>
+
+                <div id="qrCodeContainer" class="text-center">
+                  <img src="img/payment_qr.png" alt="QR Code" class="img-fluid border rounded-3 shadow-sm" style="max-width: 300px;">
+                  <p class="text-muted small mt-2 fw-bold text-primary">สแกน QR Code เพื่อชำระเงิน</p>
+                </div>
+                </div>
               <div class="mb-4"><label class="form-label text-muted small fw-bold" id="slipLabel">แนบหลักฐานการโอนเงิน (สลิป) <span class="text-danger">*</span></label><input class="form-control" type="file" id="paySlipFile" accept="image/*" required></div>
               <button type="submit" class="btn w-100 fw-bold text-white py-2 fs-6" id="btnSubmitPayment" style="background-color: #2b4d7e; border-radius: 10px;">ยืนยันการแจ้งชำระเงิน</button>
             </form>
@@ -298,8 +303,14 @@ if (isset($_GET['action']) && $_GET['action'] === 'submitPaymentData') {
 
   function updateSlipLabel() {
     const isCash = document.querySelector('input[name="paymentMethod"]:checked').value === 'เงินสด';
+    
     document.getElementById('slipLabel').innerHTML = isCash ? 'อัปโหลดใบเสร็จ (เว้นว่างได้ถ้าไม่มี)' : 'แนบหลักฐานการโอนเงิน (สลิป) <span class="text-danger">*</span>';
     document.getElementById('paySlipFile').required = !isCash;
+
+    const qrContainer = document.getElementById('qrCodeContainer');
+    if (qrContainer) {
+      qrContainer.style.display = isCash ? 'none' : 'block';
+    }
   }
 
   function submitPaymentForm(e) {

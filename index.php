@@ -9,8 +9,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $passwordInput = $_POST['password'];
 
     try {
-        // อัปเดตเป็น user_id
-        $sql = "SELECT user_id, full_name, role, password_hash FROM users WHERE user_id = ? OR full_name = ? OR phone = ?";
+        $sql = "SELECT user_id, full_name, role, password_hash FROM users WHERE (user_id = ? OR full_name = ? OR phone = ?) AND deleted_at IS NULL";
         $stmt = $conn->prepare($sql);
         
         if (!$stmt) {
@@ -42,7 +41,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 exit;
             }
         } else {
-            echo json_encode(['success' => false, 'message' => 'ไม่พบรหัสผู้ใช้งาน, ชื่อ หรือเบอร์โทรในระบบ']); 
+            echo json_encode(['success' => false, 'message' => 'ไม่พบข้อมูลผู้ใช้งาน']); 
             exit;
         }
     } catch (Exception $e) {
