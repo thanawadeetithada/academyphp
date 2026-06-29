@@ -11,16 +11,19 @@ if ($role !== 'student' && $role !== 'นักเรียน') {
 
 $userId = $_SESSION['userRowId'] ?? ''; // รหัส ST-XXXX
 
-// ==========================================
-// API: ดึงรายการค้างชำระและรอตรวจสอบ (Backend)
-// ==========================================
 if (isset($_GET['action']) && $_GET['action'] === 'getApprovedCoursesForPayment') {
     header('Content-Type: application/json; charset=utf-8');
     ini_set('display_errors', 0);
 
     try {
-        // ดึงข้อมูลการลงทะเบียนที่ได้รับการอนุมัติแล้วทั้งหมดของนักเรียน 
-        // เพิ่มเงื่อนไข e.deleted_at IS NULL เพื่อไม่ดึงข้อมูลที่ถูก Soft Delete
+        $checkStatusStmt = $conn->prepare("SELECT student_status FROM users WHERE user_id = ?");
+        $checkStatusStmt->execute([$userId]);
+        $userStatusRow = $checkStatusStmt->get_result()->fetch_assoc();
+
+        if ($userStatusRow && $userStatusRow['student_status'] === 'inactive') {
+            echo json_encode([]);
+            exit;
+        }
         $sql = "SELECT e.*, c.name, c.level, c.price, c.other_expense_name, c.other_expense_price, c.course_type, c.course_month, c.duration 
                 FROM enrollments e 
                 JOIN courses c ON e.course_id = c.course_id 

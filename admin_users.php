@@ -8,9 +8,6 @@ if (!isset($_SESSION['sessionRole']) || $_SESSION['sessionRole'] !== 'admin') {
     exit;
 }
 
-// ==========================================
-// API: จัดการข้อมูลผู้ใช้งาน (Backend)
-// ==========================================
 if (isset($_GET['action'])) {
     header('Content-Type: application/json; charset=utf-8');
     ini_set('display_errors', 0); // ป้องกัน Error HTML แทรกใน JSON
@@ -23,7 +20,6 @@ if (isset($_GET['action'])) {
             
             // 1. ดึงข้อมูลคอร์สเรียนทั้งหมด (สำหรับ Modal เลือกคอร์ส)
             case 'getAllCourses':
-                // เพิ่ม WHERE deleted_at IS NULL เพื่อไม่ให้เลือกคอร์สที่โดนลบไปแล้ว
                 $stmt = $conn->prepare("SELECT course_id as id, name, level FROM courses WHERE deleted_at IS NULL ORDER BY created_at DESC");
                 $stmt->execute();
                 $result = $stmt->get_result();
@@ -52,8 +48,9 @@ if (isset($_GET['action'])) {
                 
                 $users = [];
                 while ($row = $result->fetch_assoc()) {
-                    // แปลง Role จาก Eng เป็น Thai สำหรับ UI
                     $displayRole = ($row['role'] === 'admin') ? 'แอดมิน' : 'นักเรียน';
+                    // ตรวจสอบและแมปค่า student_status จาก DB
+                    $displayStatus = (isset($row['student_status']) && $row['student_status'] === 'inactive') ? 'พักการเรียน' : 'นักเรียน';
                     
                     $users[] = [
                         'userId' => $row['user_id'],
@@ -66,8 +63,9 @@ if (isset($_GET['action'])) {
                         'parentPhone' => $row['parent_phone'],
                         'address' => $row['address'],
                         'role' => $displayRole,
-                        'courseIds' => $row['course_ids'] ?? '', // รหัสคอร์สที่ไม่ซ้ำ
-                        'courseNames' => $row['course_names'] ?? '' // ชื่อคอร์สที่ไม่ซ้ำ
+                        'studentStatus' => $displayStatus,
+                        'courseIds' => $row['course_ids'] ?? '',
+                        'courseNames' => $row['course_names'] ?? ''
                     ];
                 }
                 echo json_encode($users);
@@ -77,6 +75,7 @@ if (isset($_GET['action'])) {
             case 'saveUser':
                 $userId = $data['userId'] ?? '';
                 $roleDB = ($data['role'] === 'แอดมิน') ? 'admin' : 'student';
+                $statusDB = (isset($data['studentStatus']) && $data['studentStatus'] === 'พักการเรียน') ? 'inactive' : 'active';
                 
                 $passHash = '';
                 if (!empty($data['password'])) {
@@ -85,23 +84,19 @@ if (isset($_GET['action'])) {
 
                 if (!empty($userId)) {
                     // =================== กรณี: แก้ไขข้อมูลเดิม (UPDATE) ===================
-                    
-                    // อัปเดตข้อมูลทั่วไป
                     if ($passHash !== '') {
-                        $sql = "UPDATE users SET full_name=?, nickname=?, grade=?, school=?, phone=?, parent_name=?, parent_phone=?, address=?, role=?, password_hash=? WHERE user_id=?";
+                        $sql = "UPDATE users SET full_name=?, nickname=?, grade=?, school=?, phone=?, parent_name=?, parent_phone=?, address=?, role=?, student_status=?, password_hash=? WHERE user_id=?";
                         $stmt = $conn->prepare($sql);
-                        $stmt->execute([$data['fullName'], $data['nickname'], $data['grade'], $data['school'], $data['phone'], $data['parentName'], $data['parentPhone'], $data['address'], $roleDB, $passHash, $userId]);
+                        $stmt->execute([$data['fullName'], $data['nickname'], $data['grade'], $data['school'], $data['phone'], $data['parentName'], $data['parentPhone'], $data['address'], $roleDB, $statusDB, $passHash, $userId]);
                     } else {
-                        $sql = "UPDATE users SET full_name=?, nickname=?, grade=?, school=?, phone=?, parent_name=?, parent_phone=?, address=?, role=? WHERE user_id=?";
+                        $sql = "UPDATE users SET full_name=?, nickname=?, grade=?, school=?, phone=?, parent_name=?, parent_phone=?, address=?, role=?, student_status=? WHERE user_id=?";
                         $stmt = $conn->prepare($sql);
-                        $stmt->execute([$data['fullName'], $data['nickname'], $data['grade'], $data['school'], $data['phone'], $data['parentName'], $data['parentPhone'], $data['address'], $roleDB, $userId]);
+                        $stmt->execute([$data['fullName'], $data['nickname'], $data['grade'], $data['school'], $data['phone'], $data['parentName'], $data['parentPhone'], $data['address'], $roleDB, $statusDB, $userId]);
                     }
                     $targetUserId = $userId;
 
                 } else {
                     // =================== กรณี: เพิ่มผู้ใช้งานใหม่ (INSERT) ===================
-                    
-                    // สร้างรหัสประจำตัวใหม่ ST-XXXX หรือ AD-XXXX
                     $prefix = ($roleDB === 'admin') ? 'AD-' : 'ST-';
                     $sql_id = "SELECT user_id FROM users WHERE user_id LIKE '$prefix%' ORDER BY CAST(SUBSTRING(user_id, 4) AS UNSIGNED) DESC LIMIT 1";
                     $res_id = $conn->query($sql_id);
@@ -113,17 +108,16 @@ if (isset($_GET['action'])) {
                     }
                     $targetUserId = $prefix . str_pad($nextIdNum, 4, '0', STR_PAD_LEFT);
 
-                    $sql = "INSERT INTO users (user_id, full_name, nickname, grade, school, phone, parent_name, parent_phone, address, role, password_hash) 
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                    $sql = "INSERT INTO users (user_id, full_name, nickname, grade, school, phone, parent_name, parent_phone, address, role, student_status, password_hash) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
                     $stmt = $conn->prepare($sql);
-                    $stmt->execute([$targetUserId, $data['fullName'], $data['nickname'], $data['grade'], $data['school'], $data['phone'], $data['parentName'], $data['parentPhone'], $data['address'], $roleDB, $passHash]);
+                    $stmt->execute([$targetUserId, $data['fullName'], $data['nickname'], $data['grade'], $data['school'], $data['phone'], $data['parentName'], $data['parentPhone'], $data['address'], $roleDB, $statusDB, $passHash]);
                 }
 
                 // =================== ซิงค์คอร์สเรียน (Enrollments) ===================
                 if ($roleDB === 'student') {
                     $newCourses = array_filter(array_map('trim', explode(',', $data['courses'])));
                     
-                    // 1. ดึงคอร์สเดิมที่มีอยู่ (เช็คเฉพาะที่ยังไม่โดน Soft Delete)
                     $stmt = $conn->prepare("SELECT course_id FROM enrollments WHERE user_id = ? AND deleted_at IS NULL");
                     $stmt->execute([$targetUserId]);
                     $res = $stmt->get_result();
@@ -132,7 +126,6 @@ if (isset($_GET['action'])) {
                         $existingCourses[] = $row['course_id'];
                     }
 
-                    // 2. ลบคอร์สที่โดนติ๊กออก 
                     $coursesToDelete = array_diff($existingCourses, $newCourses);
                     if (!empty($coursesToDelete)) {
                         $placeholders = implode(',', array_fill(0, count($coursesToDelete), '?'));
@@ -141,7 +134,6 @@ if (isset($_GET['action'])) {
                         $delStmt->execute($params);
                     }
 
-                    // 3. เพิ่มคอร์สที่ติ๊กใหม่
                     $coursesToAdd = array_diff($newCourses, $existingCourses);
                     if (!empty($coursesToAdd)) {
                         $insStmt = $conn->prepare("INSERT INTO enrollments (enroll_id, user_id, course_id, approval_status, payment_status) VALUES (?, ?, ?, 'approved', 'pending_payment')");
@@ -151,7 +143,6 @@ if (isset($_GET['action'])) {
                         }
                     }
                 } else {
-                    // ถ้าเป็นแอดมิน ให้ลบข้อมูลคอร์สออกให้หมด
                     $stmt = $conn->prepare("DELETE FROM enrollments WHERE user_id = ?");
                     $stmt->execute([$targetUserId]);
                 }
@@ -159,10 +150,9 @@ if (isset($_GET['action'])) {
                 echo json_encode(['success' => true]);
                 break;
 
-            // 4. ลบข้อมูลผู้ใช้งาน (เปลี่ยนเป็น Soft Delete)
+            // 4. ลบข้อมูลผู้ใช้งาน
             case 'deleteUser':
                 $userId = $data['userId'];
-                // ใช้การ UPDATE แทน DELETE
                 $stmt = $conn->prepare("UPDATE users SET deleted_at = CURRENT_TIMESTAMP WHERE user_id = ?");
                 $stmt->execute([$userId]);
                 
@@ -177,7 +167,7 @@ if (isset($_GET['action'])) {
         echo json_encode(['success' => false, 'message' => 'Database Error: ' . $e->getMessage()]);
     }
     
-    exit; // จบการทำงานของ API
+    exit;
 }
 ?>
 
@@ -278,11 +268,12 @@ if (isset($_GET['action'])) {
                 <th class="py-3 fw-bold border-0">โรงเรียน</th>
                 <th class="py-3 fw-bold border-0">คอร์ส</th>
                 <th class="py-3 fw-bold border-0 text-center">สิทธิ์ผู้ใช้งาน</th>
+                <th class="py-3 fw-bold border-0 text-center">สถานะ</th>
                 <th class="py-3 px-4 fw-bold border-0 text-center">จัดการ</th>
               </tr>
             </thead>
             <tbody id="userTableBody" style="border-top: none;">
-              <tr><td colspan="6" class="text-center py-5 text-muted"><span class="spinner-border spinner-border-sm me-2"></span>กำลังโหลดข้อมูล...</td></tr>
+              <tr><td colspan="7" class="text-center py-5 text-muted"><span class="spinner-border spinner-border-sm me-2"></span>กำลังโหลดข้อมูล...</td></tr>
             </tbody>
           </table>
         </div>
@@ -341,6 +332,15 @@ if (isset($_GET['action'])) {
               <select class="form-select bg-light border-0" id="eRole" onchange="handleRoleChange()" required>
                 <option value="นักเรียน">นักเรียน</option>
                 <option value="แอดมิน">แอดมิน</option>
+              </select>
+            </div>
+
+            <!-- ส่วนนี้คือ Dropdown สถานะนักเรียนที่จะแสดงทั้งตอน เพิ่มใหม่ และ แก้ไขข้อมูล -->
+            <div class="col-md-6" id="statusContainer">
+              <label class="form-label small fw-bold">สถานะนักเรียน <span class="text-danger">*</span></label>
+              <select class="form-select bg-light border-0" id="eStudentStatus">
+                <option value="นักเรียน">นักเรียน</option>
+                <option value="พักการเรียน">พักการเรียน</option>
               </select>
             </div>
 
@@ -441,7 +441,7 @@ if (isset($_GET['action'])) {
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 
 <script>
-  const API_URL = 'admin_users.php'; // เรียกใช้ไฟล์ตัวเอง
+  const API_URL = 'admin_users.php';
   
   let allUsersList = [];
   let allCoursesForSelect = [];
@@ -455,7 +455,6 @@ if (isset($_GET['action'])) {
     document.getElementById('mobileOverlay').classList.toggle('show');
   }
 
-  // ฟังก์ชันสื่อสารกับ PHP API
   async function callAPI(action, data = null) {
     try {
       const options = {
@@ -471,7 +470,6 @@ if (isset($_GET['action'])) {
     }
   }
 
-  // ================= Setup เริ่มต้น =================
   document.addEventListener("DOMContentLoaded", function() {
     loadInitialData();
   });
@@ -479,11 +477,9 @@ if (isset($_GET['action'])) {
   function loadInitialData() {
     showAdminLoading('กำลังโหลดข้อมูล...');
     
-    // ดึงคอร์สเรียนเตรียมไว้สำหรับ Modal
     callAPI('getAllCourses').then(courses => {
       allCoursesForSelect = courses || [];
       
-      // ดึงรายชื่อผู้ใช้
       callAPI('getAllUsers').then(users => {
         allUsersList = users || [];
         displayUsersTable(allUsersList);
@@ -492,13 +488,12 @@ if (isset($_GET['action'])) {
     });
   }
 
-  // ================= UI จัดการตาราง =================
   function displayUsersTable(usersData) {
     const tbody = document.getElementById('userTableBody');
     tbody.innerHTML = '';
     
     if(!usersData || usersData.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" class="text-center py-5 text-muted">ไม่พบข้อมูลผู้ใช้งาน</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center py-5 text-muted">ไม่พบข้อมูลผู้ใช้งาน</td></tr>';
       return;
     }
 
@@ -506,6 +501,13 @@ if (isset($_GET['action'])) {
       let roleBadge = user.role === 'แอดมิน' 
         ? '<span class="badge rounded-pill bg-primary-subtle text-primary px-3 py-2 fw-medium"><i class="bi bi-shield-lock-fill me-1"></i>แอดมิน</span>' 
         : '<span class="badge rounded-pill bg-info-subtle text-info px-3 py-2 fw-medium"><i class="bi bi-person-fill me-1"></i>นักเรียน</span>';
+
+      let statusBadge = '-';
+      if (user.role !== 'แอดมิน') {
+          statusBadge = user.studentStatus === 'พักการเรียน' 
+            ? '<span class="badge rounded-pill bg-warning text-dark px-3 py-2 fw-medium">พักการเรียน</span>'
+            : '<span class="badge rounded-pill bg-success-subtle text-success px-3 py-2 fw-medium">นักเรียน</span>';
+      }
 
       let courseNamesDisplay = user.courseNames ? user.courseNames : '-';
 
@@ -516,6 +518,7 @@ if (isset($_GET['action'])) {
           <td class="py-3 text-dark text-nowrap">${user.school}</td>
           <td class="py-3 text-dark" style="min-width: 150px;">${courseNamesDisplay}</td>
           <td class="py-3 text-center text-nowrap">${roleBadge}</td>
+          <td class="py-3 text-center text-nowrap">${statusBadge}</td>
           <td class="px-4 py-3 text-center text-nowrap">
             <button class="btn btn-sm btn-outline-primary me-2" onclick="openEditForm('${user.userId}')" title="แก้ไขข้อมูล">
               <i class="bi bi-pencil-square"></i>
@@ -539,24 +542,26 @@ if (isset($_GET['action'])) {
     displayUsersTable(filtered);
   }
 
-  // ================= UI ฟอร์มเพิ่ม/แก้ไข =================
   function handleRoleChange() {
     let role = document.getElementById('eRole').value;
     let courseBtn = document.getElementById('btnSelectCourse');
     let eCoursesInput = document.getElementById('eCourses');
     let star = document.getElementById('courseRequiredStar');
+    let statusContainer = document.getElementById('statusContainer');
     
     if (role === 'แอดมิน') {
       courseBtn.disabled = true;
       document.getElementById('eCoursesIds').value = '';
       eCoursesInput.value = 'สิทธิ์แอดมินไม่ต้องเลือกลงคอร์ส';
       if (star) star.classList.add('d-none');
+      if (statusContainer) statusContainer.classList.add('d-none');
     } else {
       courseBtn.disabled = false;
       if(eCoursesInput.value === 'สิทธิ์แอดมินไม่ต้องเลือกลงคอร์ส') {
         eCoursesInput.value = '';
       }
       if (star) star.classList.remove('d-none');
+      if (statusContainer) statusContainer.classList.remove('d-none');
     }
   }
 
@@ -582,6 +587,7 @@ if (isset($_GET['action'])) {
     document.getElementById('eCourses').value = ''; 
     document.getElementById('eCoursesIds').value = ''; 
     document.getElementById('eRole').value = 'นักเรียน';
+    document.getElementById('eStudentStatus').value = 'นักเรียน';
 
     handleRoleChange();
 
@@ -611,6 +617,10 @@ if (isset($_GET['action'])) {
     document.getElementById('eCourses').value = user.courseNames; 
     
     document.getElementById('eRole').value = user.role || 'นักเรียน';
+    
+    // ตั้งค่า dropdown สถานะนักเรียน ให้ตรงกับข้อมูลเดิม
+    document.getElementById('eStudentStatus').value = user.studentStatus || 'นักเรียน';
+    
     document.getElementById('ePassword').value = '';
     document.getElementById('eConfirmPassword').value = '';
 
@@ -663,13 +673,14 @@ if (isset($_GET['action'])) {
       parentPhone: document.getElementById('eParentPhone').value,
       courses: document.getElementById('eCoursesIds').value,
       role: document.getElementById('eRole').value,
+      studentStatus: document.getElementById('eStudentStatus').value,
       password: pass
     };
 
     callAPI('saveUser', payload).then(res => {
       if(res.success) {
         closeEditForm();
-        loadInitialData(); // รีโหลดข้อมูลใหม่
+        loadInitialData();
       } else {
         hideAdminLoading();
         alert('เกิดข้อผิดพลาด: ' + res.message);
@@ -677,7 +688,6 @@ if (isset($_GET['action'])) {
     });
   }
 
-  // ================= UI การลบข้อมูล =================
   function promptDeleteUser(userId, name) {
     document.getElementById('deleteUserIdTarget').value = userId;
     document.getElementById('deleteUserName').innerText = name;
@@ -700,7 +710,6 @@ if (isset($_GET['action'])) {
     });
   }
 
-  // ================= UI เลือกคอร์สเรียน (Modal) =================
   function openCourseSelectModal() {
     if(!courseSelectModalInstance) {
       courseSelectModalInstance = new bootstrap.Modal(document.getElementById('courseSelectModal'));
@@ -762,7 +771,6 @@ if (isset($_GET['action'])) {
   function confirmCourseSelection() {
     let selectedIdsStr = tempSelectedCourseIds.join(',');
     
-    // หาชื่อคอร์สเพื่อมาโชว์ใน Input
     let names = tempSelectedCourseIds.map(id => {
       let found = allCoursesForSelect.find(c => c.id === id);
       return found ? found.name : id; 
